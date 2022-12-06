@@ -1,17 +1,19 @@
 use super::{HalfWord,Word};
 
 #[allow(non_camel_case_types)]
+#[derive(Debug,PartialEq)]
 pub enum Opcode{
    UNDEFINED,
    ADCS,
    ADDI,
    ADDI8,
    ADDS_REG,
-   ADD_REG,
+   ADDS_REG_T2,
    ADD_SPI,
-   INCR_SP_BY,
+   ADD_REG_SP_IMM8,
+   INCR_SP_BY_IMM7,
    INCR_SP_BY_REG,
-   ADD_REG_SP,
+   INCR_REG_BY_SP,
    ADR,
    ANDS,
    ASRS_I,
@@ -39,9 +41,9 @@ pub enum Opcode{
    BR_EXCHANGE
 } 
 
-impl From<HalfWord> for Opcode{
-   fn from(a: HalfWord)->Self{
-      if adsc_mask(&a){
+impl From<&HalfWord> for Opcode{
+   fn from(a: &HalfWord)->Self{
+      if adcs_mask(&a){
          return Opcode::ADCS;
       }
 
@@ -53,28 +55,28 @@ impl From<HalfWord> for Opcode{
          return Opcode::ADDI8;
       }
 
-      if adds_reg_mask(&a){
+      if adds_3reg_mask(&a){
          return Opcode::ADDS_REG;
       }
 
-      if add_reg_sp_mask(&a){
-         return Opcode::ADD_REG_SP;
+      if incr_reg_by_sp(&a){
+         return Opcode::INCR_REG_BY_SP;
       }
 
       if incr_sp_by_reg_mask(&a){
          return Opcode::INCR_SP_BY_REG;
       }
 
-      if add_reg_mask(&a){
-         return Opcode::ADD_REG;
+      if adds_2reg_mask(&a){
+         return Opcode::ADDS_REG_T2;
       }
 
       if add_sp_with_immediate_and_store_in_reg_mask(&a){
-         return Opcode::ADD_SPI;
+         return Opcode::ADD_REG_SP_IMM8;
       }
 
-      if incr_sp_by_mask(&a){
-         return Opcode::INCR_SP_BY;
+      if incr_sp_by_imm7_mask(&a){
+         return Opcode::INCR_SP_BY_IMM7;
       }
 
       if adr_mask(&a){
@@ -126,53 +128,56 @@ impl From<HalfWord> for Opcode{
 }
 
 #[inline]
-const fn adsc_mask(hw: &HalfWord)->bool{
-   (hw[0] == 0x41) && (hw[1] == 0x40)
+const fn adcs_mask(hw: &HalfWord)->bool{
+   //(hw[0] == 0x41) && (hw[1] == 0x40)
+   (hw[0] & 0x40 > 0 ) && hw[1] == 0x41
 }
 
 #[inline]
 const fn addi_mask(hw: &HalfWord)->bool{
-   hw[0] == 0x1C || hw[0] == 0x1D
+   hw[1] == 0x1C || hw[1] == 0x1D
 }
 
 #[inline]
 const fn addi8_mask(hw: &HalfWord)->bool{
-   hw[0] >> 4 == 0x03 && (hw[0] | (1 << 3) != hw[0])
-} 
-
-#[inline]
-const fn adds_reg_mask(hw: &HalfWord)->bool{
-   hw[0] == 0x18 || hw[0] == 0x19
+   //(hw[1] >> 3 ) == 0x03
+   hw[1] & 0xF8 == 0x30
 }
 
 #[inline]
-const fn add_reg_mask(hw: &HalfWord)->bool{
-   hw[0] == 0x44
+const fn adds_3reg_mask(hw: &HalfWord)->bool{
+   //hw[0] == 0x18 || hw[0] == 0x19
+   hw[1] & 0xFE == 0x18
+}
+
+#[inline]
+const fn adds_2reg_mask(hw: &HalfWord)->bool{
+   hw[1] == 0x44
 }
 
 #[inline]
 const fn add_sp_with_immediate_and_store_in_reg_mask(hw: &HalfWord)->bool{
-   hw[0] >> 4 == 0x0A  && (hw[0] & (1 << 3) > 0)
+   hw[1] & 0xF8 == 0xA8
 }
 
 #[inline]
-const fn incr_sp_by_mask(hw: &HalfWord)->bool{
-   hw[0] == 0xB0 && (hw[1] >> 7 == 0)
+const fn incr_sp_by_imm7_mask(hw: &HalfWord)->bool{
+   hw[1] == 0xB0 && (hw[0] & 0x80 == 0)
 }
 
 #[inline]
-const fn add_reg_sp_mask(hw: &HalfWord)->bool{
-   hw[0] == 0x44 && (hw[1] & 0x68 == 0x68)
+const fn incr_reg_by_sp(hw: &HalfWord)->bool{
+   hw[1] == 0x44 && (hw[0] & 0x78 == 0x68)
 }
 
 #[inline]
 const fn incr_sp_by_reg_mask(hw: &HalfWord)->bool{
-   hw[0] == 0x44 && (hw[1] & 0x85 == 0x85)
+   hw[1] == 0x44 && (hw[0] & 0x87 == 0x85)
 }
 
 #[inline]
 const fn adr_mask(hw: &HalfWord)->bool{
-   (hw[0] >> 4) == 0x0A && ((hw[0] | 1 << 3)!= hw[0])
+   hw[1] & 0xF8 == 0xA0 
 }
 
 #[inline]
@@ -247,8 +252,8 @@ const fn blx_mask(hw: &HalfWord)->bool{
 const fn bx_mask(hw: &HalfWord)->bool{
    hw[0] == 0x47 && hw[1] & 0x87 == 0
 }
-impl From<Word> for Opcode{
-   fn from(a: Word)->Self{
+impl From<&Word> for Opcode{
+   fn from(a: &Word)->Self{
       if bl_mask(&a){
          return Opcode::BR_AND_LNK;
       }
@@ -259,4 +264,26 @@ impl From<Word> for Opcode{
 #[inline]
 const fn bl_mask(bytes: &Word)->bool{
    (bytes[0] & 0xF0 == 0xF0)  && (bytes[2] & 0xC0 == 0xC0)
+}
+
+pub fn decode_opcodes(bytes: &[u8])->Vec<Opcode>{
+   let mut i: usize = 0;
+   let mut opcodes = Vec::new();
+   while i < bytes.len(){
+      let hw: &[u8;2] = &bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
+      let thumb_instruction = Opcode::from(hw);
+      if thumb_instruction == Opcode::UNDEFINED{
+         if i + 4 > bytes.len(){
+            break;
+         }
+         let word: &[u8;4] = &bytes[i..i+4].try_into().expect("should be 4byte aligned");
+         let instruction_32bit = Opcode::from(word);
+         opcodes.push(instruction_32bit);
+         i += 4;
+      }else{
+         opcodes.push(thumb_instruction);
+         i += 2;
+      }
+   }
+   opcodes
 }

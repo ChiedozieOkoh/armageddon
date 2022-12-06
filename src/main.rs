@@ -1,5 +1,6 @@
 mod asm;
 mod elf;
+mod dwarf;
 
 #[cfg(test)]
 mod tests;

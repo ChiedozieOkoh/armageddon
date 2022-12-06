@@ -1,4 +1,6 @@
-use std::{io::{BufReader, Read}, path::Path, fs::File};
+use std::io::{BufReader, Read,Seek};
+use std::path::Path; 
+use std::fs::File;
 
 type Addr = [u8;4];
 type ElfHalf = [u8;2];
@@ -39,6 +41,7 @@ pub enum EIType{
 }
 
 #[repr(u8)]
+#[derive(PartialEq)]
 pub enum EIData{
    _None,
    Lsb,
@@ -70,6 +73,7 @@ impl From<u8> for EIVersion{
       }
    }
 }
+
 #[allow(non_camel_case_types)]
 pub enum EIMachine{
    _None,
@@ -96,18 +100,43 @@ pub struct ElfHeader{
    pub section_header_table_index: ElfHalf
 }
 
+impl ElfHeader{
+   pub fn get_elf_endianess(&self)-> EIData{
+      EIData::from(self.identity[5])
+   }
+}
+
+fn to_native_endianness_16b(header: &ElfHeader, bytes: &[u8;2])->u16{
+   match header.get_elf_endianess(){
+      EIData::_None => panic!("cannot read with unknown endianness"),
+      EIData::Lsb => u16::from_le_bytes(*bytes),
+      EIData::Msb => u16::from_be_bytes(*bytes)
+   }
+}
+
+fn to_native_endianness_32b(header: &ElfHeader, bytes: &[u8;4])->u32{
+   match header.get_elf_endianess(){
+      EIData::_None => panic!("cannot read with unknown endianness"),
+      EIData::Lsb => u32::from_le_bytes(*bytes),
+      EIData::Msb => u32::from_be_bytes(*bytes)
+   }
+}
+
 pub enum SectionHeaderType{
-   NULL,
-   PROGBITS 
+   NULL = 0x0,
+   PROGBITS = 0x1,
+   NOBITS = 0x8,
+   ArmAttributes = 0x70000003,
 }
 
 pub enum SectionHeaderFlag{
    Write = 0x1,
-   Read  = 0x2,
+   Allocatable  = 0x2,
    Executable = 0x4
 }
 
 #[repr(C,packed)]
+#[derive(Debug)]
 pub struct SectionHeader{
    name: ElfWord,
    _type: ElfWord,
@@ -121,7 +150,22 @@ pub struct SectionHeader{
    entry_size: ElfWord,
 }
 
+pub fn is_arm_attribute_section_hdr(header: &ElfHeader, sect_header: &SectionHeader)->bool{
+   todo!()
+}
 
+pub fn is_text_section_hdr(header: &ElfHeader, sect_header: &SectionHeader)->bool{
+   let flags = to_native_endianness_32b(header,&sect_header.flags);
+   let _type = to_native_endianness_32b(header, &sect_header._type);
+   const text_mask: u32 = SectionHeaderFlag::Allocatable as u32 | SectionHeaderFlag::Executable as u32;
+   println!("f: {} t: {} == f:{} t:{}",flags,_type,text_mask,SectionHeaderType::PROGBITS as u32);
+   (_type == SectionHeaderType::PROGBITS as u32) && (flags == text_mask)
+}
+
+pub fn has_no_bytes(header: &ElfHeader, sect_header: &SectionHeader)->bool{
+   let flags = to_native_endianness_32b(header,&sect_header._type);
+   (flags & SectionHeaderType::NOBITS as u32) > 0
+}
 
 #[derive(Debug)]
 pub enum ElfError{
@@ -134,26 +178,10 @@ impl From<std::io::Error> for ElfError{
       ElfError::FileIO(err.to_string())
    }
 } 
-pub fn get_header(file: &Path)-> Result<ElfHeader,ElfError>{
-   let f = File::open(file)?;
-   /* let mut header_buf = vec![0; ELF_HDR_LEN];
-   let reader = BufReader::new(f);
-   reader.read_exact(&mut header_buf)?;
-   if header_buf[..4] != ELF_FORMAT_HDR{
-      return Err(ElfError::FileIO(String::from("unsupported format")));
-   }
-   let (class, data, version): (EIClass, EIData, EIVersion) = match header_buf[4..8]{
-      [e_class,e_data,e_version] => {
-         (e_class.into(), e_data.into(), e_version.into())
-      }
-   };
-   if class == EIClass::_None{
-      return Err(ElfError::FileIO(
-            String::from("could not determine whether object size is 32 or 64, EIClass was undefined" )
-         ));
-   }
-   */
 
+
+pub fn get_header(file: &Path)-> Result<(ElfHeader, BufReader<File>),ElfError>{
+   let f = File::open(file)?;
    const size: usize = std::mem::size_of::<ElfHeader>();
    let mut source: [u8;size] = [0;size];
    let mut reader = BufReader::new(f);
@@ -167,6 +195,86 @@ pub fn get_header(file: &Path)-> Result<ElfHeader,ElfError>{
    if header.identity[..4] != ELF_FORMAT_HDR {
       return Err(ElfError::FileIO(String::from("unsupported format")));
    }
+
+   if header.get_elf_endianess() == EIData::_None{
+      return Err(ElfError::Arch(String::from("could not read endianness")));
+   }
    
+   Ok((header,reader))
+}
+
+pub fn get_sections_header(
+   reader: &mut BufReader<File>,
+   header: &ElfHeader
+   )->Result<SectionHeader,ElfError>{
+   let section_offset = to_native_endianness_32b(header, &header.section_header_offset);
+   reader.seek(std::io::SeekFrom::Start(section_offset as u64))?;
+   const size: usize = std::mem::size_of::<SectionHeader>();
+   let mut source: [u8;size] = [0;size];
+   reader.read_exact(&mut source)?;
+   let header: SectionHeader;
+   unsafe {
+      //spooky
+      header = std::mem::transmute_copy::<[u8;size],SectionHeader>(&source);
+   }
    Ok(header)
+}
+
+pub fn get_all_section_headers(
+   reader: &mut BufReader<File>,
+   header: &ElfHeader
+)->Result<Vec<SectionHeader>,ElfError>{
+   let section_offset = to_native_endianness_32b(header, &header.section_header_offset);
+   reader.seek(std::io::SeekFrom::Start(section_offset as u64))?;
+   const size: usize = std::mem::size_of::<SectionHeader>();
+   let mut header_meta_data_source: [u8;size] = [0;size];
+   let num_headers = to_native_endianness_16b(header, &header.num_section_header_entries);
+   println!("headers {}",num_headers);
+   let mut headers: Vec<SectionHeader> = Vec::with_capacity(num_headers as usize);
+   for _ in 0 .. num_headers{
+      reader.read_exact(&mut header_meta_data_source)?;
+      let header: SectionHeader;
+      unsafe {
+         //spooky
+         header = std::mem::transmute_copy::<[u8;size],SectionHeader>(&header_meta_data_source);
+      }
+      headers.push(header);
+   }
+   Ok(headers)
+} 
+
+
+pub fn read_text_section(
+   reader: &mut BufReader<File>,
+   elf_header: &ElfHeader,
+   sect_header: &SectionHeader
+   )->Result<Vec<u8>,ElfError>{
+   //reader.rewind
+   //
+   if !is_text_section_hdr(elf_header, sect_header){
+      return Err(ElfError::FileIO(String::from("cannot read this is not a text section")));
+   }
+   if has_no_bytes(elf_header, &sect_header){
+      println!("warn| text section has no data");
+      return Ok(Vec::new());
+   }
+   let text_offset = to_native_endianness_32b(elf_header, &sect_header.offset_of_entries_in_bytes);
+   let bytes = to_native_endianness_32b(elf_header, &sect_header.section_size_in_bytes);
+   let alignment = to_native_endianness_32b(elf_header, &sect_header.alignment);
+   let entry_size = to_native_endianness_32b(elf_header, &sect_header.entry_size);
+   println!("text section is {} bytes",bytes);
+   println!("address alignment {} bytes",alignment);
+   println!("section entry size {} bytes",entry_size);
+   let mut section = vec![0u8;bytes as usize];
+   reader.seek(std::io::SeekFrom::Start(text_offset as u64))?;
+   reader.read_exact(&mut section)?;
+   Ok(section)
+}
+
+fn read_arm_attributes_section(
+   reader: &mut BufReader<File>,
+   elf_header: &ElfHeader,
+   sect_header: &SectionHeader
+   )->Result<Vec<u8>,ElfError>{
+   todo!()
 }
