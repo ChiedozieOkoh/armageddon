@@ -35,6 +35,15 @@ pub fn from_arm_bytes(word: Word)-> u32{
 }
 
 #[inline]
+pub const fn from_arm_bytes_16b(hw :HalfWord)->u16{
+   u16::from_le_bytes(hw)
+}
+
+#[inline]
+pub fn u16_to_arm_hword(v: u16)->u16{
+   u16::to_le(v)
+}
+#[inline]
 pub fn u32_to_arm_bytes(v: u32)-> [u8;4]{
    u32::to_le_bytes(v)
 }

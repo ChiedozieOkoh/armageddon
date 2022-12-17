@@ -1,3 +1,4 @@
 /target
 /assembly_tests
 a.out
+*.s
