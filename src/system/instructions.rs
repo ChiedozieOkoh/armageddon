@@ -1,16 +1,22 @@
-use std::num::TryFromIntError;
-use super::registers::{
+use crate::system::registers::{
    Apsr,
    get_carry_bit,
    set_carry_bit,
    set_overflow_bit,
    set_zero_bit,
-   clear_carry_bit, clear_overflow_bit, clear_zero_bit
+   clear_carry_bit, 
+   clear_overflow_bit,
+   clear_zero_bit
 };
-use super::{clear_bit, get_bit};
+use crate::binutils::{
+   BitField,
+   clear_bit,
+   get_bit,
+   signed_bitfield
+};
 
 fn add_immediate(apsr: &mut Apsr, a: u32, b: u32)->u32{
-    let (sum, carry, overflow) = add_with_carry(a,b,0);
+    let (sum, carry, overflow) = add_with_carry::<31>(a.into(),b.into(),0);
    if carry{
       set_carry_bit(apsr);
    }else{
@@ -32,8 +38,9 @@ fn add_immediate(apsr: &mut Apsr, a: u32, b: u32)->u32{
    sum
   
 }
+
 fn adc(apsr: &mut Apsr, a: u32, b: u32)->u32{
-   let (sum, carry, overflow) = add_with_carry(a, b, get_carry_bit(apsr));
+   let (sum, carry, overflow) = add_with_carry::<31>(a.into(), b.into(), get_carry_bit(apsr));
    if carry{
       set_carry_bit(apsr);
    }else{
@@ -51,7 +58,6 @@ fn adc(apsr: &mut Apsr, a: u32, b: u32)->u32{
    }else{
       clear_zero_bit(apsr);
    }
-
    sum
 }
 
@@ -63,12 +69,17 @@ fn left_shift_left_with_carry(a: u32,shift: u32, carry: u32)->(u32,u32){
    let carry = get_bit(31, extended);
    (result,carry)
 }
-
-fn add_with_carry(a: u32, b: u32, carry: u32)-> (u32, bool, bool){
-   let sum = a + b + carry;
-   let result = clear_bit(31, sum);
+pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-> (u32, bool, bool){
+   let sum: u32 = a.0 + b.0 + carry;
+   println!("sum= {}",sum);
+   let signed_sum: i32 = signed_bitfield::<L>(a) + signed_bitfield::<L>(b) + carry as i32;
+   let result = clear_bit(L, sum);
+   println!("Ssum = {} + {} + {}",signed_bitfield::<L>(a),signed_bitfield::<L>(b),carry);
+   println!("signed sum={}",signed_sum);
    let carry_out = result != sum;
-   let sum_result: Result<i32,TryFromIntError> = sum.try_into();
-   let overflow = sum_result.is_err();
+   println!("res({}) != Usum({}) = {}",result,sum,carry_out);
+   let overflow = signed_bitfield::<L>(sum.into()) != signed_sum;
+   println!("Sres({}) != Ssum({}) = {}",signed_bitfield::<L>(sum.into()),signed_sum,overflow);
    (result,carry_out,overflow)
 }
+

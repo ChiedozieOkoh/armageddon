@@ -1,4 +1,8 @@
-use crate::asm::decode::{Opcode,decode_opcodes};
+use crate::asm::decode::{Opcode,B32,B16};
+use crate::asm::decode_operands::{
+   get_operands, Operands
+};
+
 use crate::elf::decoder::ElfError;
 use crate::asm::HalfWord;
 use std::path::{Path, PathBuf};
@@ -86,6 +90,7 @@ fn decode_single_16b_instruction(path: &Path, asm: &[u8])->Result<Opcode,std::io
    let opcodes = load_instruction_opcodes(&elf).unwrap();
    let first_instr: [u8;2] = [opcodes[0],opcodes[1]];
 
+   println!("bin: {:#x},{:#x}",first_instr[0],first_instr[1]);
    let first: Opcode = (&first_instr).into();
 
    std::fs::remove_file(path)?;
@@ -108,6 +113,20 @@ fn assemble_and_decode<F: Fn(&Path)->Result<PathBuf,IOError>> (path: &Path, asm:
    Ok(first)
 }
 
+fn assemble_16b<F: Fn(&Path)->Result<PathBuf,IOError>> (path: &Path, asm: &[u8],assembler: F)->Result<HalfWord,IOError>{
+   write_asm(path,asm)?;
+   let elf = assembler(path)?;
+   let opcodes = load_instruction_opcodes(&elf).unwrap();
+   let first_instr: [u8;2] = [opcodes[0],opcodes[1]];
+   Ok(first_instr)
+}
+
+fn assemble(path: &Path, asm: &[u8])->Result<Vec<u8>,ElfError>{
+   write_asm(path,asm)?;
+   let elf = asm_file_to_elf(path)?;
+   load_instruction_opcodes(&elf)
+}
+
 fn assemble_and_decode_32b<F: Fn(&Path)->Result<PathBuf,IOError>> (path: &Path, asm: &[u8],assembler: F)->Result<Opcode,IOError>{
    write_asm(path,asm)?;
    let elf = assembler(path)?;
@@ -120,37 +139,62 @@ fn assemble_and_decode_32b<F: Fn(&Path)->Result<PathBuf,IOError>> (path: &Path, 
    std::fs::remove_file(elf)?;
    Ok(first)
 }
-#[test]
-pub fn should_recognise_instructions()-> Result<(),std::io::Error>{
-   let path = Path::new("assembly_tests/adc.s");
-   let instruction = decode_single_16b_instruction(
-      path, 
-      b".text\n\t.thumb\nADC r0, r1\n"
-   ).unwrap();
-   assert_eq!(Opcode::ADCS,instruction);
 
+#[test]
+pub fn should_recognise_adc()-> Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/adc.s");
+   let src_code = b".text\n\t.thumb\nADC r5, r1\n";
+
+   let adc = decode_single_16b_instruction(
+      path, 
+      src_code
+   ).unwrap();
+
+   let bin = assemble_16b(
+      path,
+      src_code,
+      asm_file_to_elf
+   ).unwrap();
+
+   if let Some(Operands::RegisterPair(dest,src)) =  get_operands(&Opcode::_16Bit(B16::ADCS),&bin){
+      assert_eq!(5u8,dest.0);
+      assert_eq!(1u8,src.0);
+   }else{
+      panic!("could not parse adc operands");
+   }
+
+   assert_eq!(Opcode::_16Bit(B16::ADCS),adc);
    Ok(())
 }
 
 #[test]
 pub fn should_recognise_add_with_immediates()-> Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/addi.s");
-   write_asm(path, b".text\n\t.thumb\nADD r0,r1,#7\nADD r0,r1,#1\nADD r0, #255\nADD r0, #44")?;
+   write_asm(
+      path,
+      b".text\n\t.thumb\nADD r0,r1,#7\nADD r7,r1,#5\nADD r0, #255\nADD r2, #255\n"
+   )?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
-   let mut first_inst: [u8;2] = [0;2];
-   first_inst[0] = opcodes[0];
-   first_inst[1] = opcodes[1];
-   let mut second_instr: [u8;2] = [0;2];
-   second_instr[0] = opcodes[2];
-   second_instr[1] = opcodes[3];
-   let mut third_instr: [u8;2] = [0;2];
-   third_instr[0] = opcodes[4];
-   third_instr[1] = opcodes[5];
-   let mut fourth_instr: [u8;2] = [0;2];
-   fourth_instr[0] = opcodes[6];
-   fourth_instr[1] = opcodes[7];
+   let first_inst: [u8;2] = [opcodes[0],opcodes[1]];
+   let second_instr: [u8;2] = [opcodes[2],opcodes[3]];
+   let third_instr: [u8;2] = [opcodes[4],opcodes[5]];
+   let fourth_instr: [u8;2] = [opcodes[6],opcodes[7]];
 
+   if let Some(Operands::ADD_Imm3(dest_0,r0,imm3)) = get_operands(&Opcode::_16Bit(B16::ADD_Imm3),&second_instr){
+      assert_eq!(dest_0.0,7u8);
+      assert_eq!(r0.0,1);
+      assert_eq!(imm3.0,5);
+   }else {
+      panic!("could not parse add::Imm3 operands");
+   }
+
+   if let Some(Operands::ADD_Imm8(dest_1,imm8)) = get_operands(&Opcode::_16Bit(B16::ADD_Imm8),&fourth_instr){
+      assert_eq!(dest_1.0,2u8);
+      assert_eq!(imm8.0,255);
+   }else {
+      panic!("could not parse add::Imm8 operands");
+   }
 
    let instr: Opcode = (&first_inst).into();
    let secnd: Opcode = (&second_instr).into();
@@ -160,10 +204,10 @@ pub fn should_recognise_add_with_immediates()-> Result<(),std::io::Error>{
    println!("opcode raw bin{:?}",opcodes);
    std::fs::remove_file(path)?;
    std::fs::remove_file(elf)?;
-   assert_eq!(Opcode::ADD_Imm3,instr);
-   assert_eq!(Opcode::ADD_Imm3,secnd);
-   assert_eq!(Opcode::ADD_Imm8,third);
-   assert_eq!(Opcode::ADD_Imm8,fourth);
+   assert_eq!(Opcode::_16Bit(B16::ADD_Imm3),instr);
+   assert_eq!(Opcode::_16Bit(B16::ADD_Imm3),secnd);
+   assert_eq!(Opcode::_16Bit(B16::ADD_Imm8),third);
+   assert_eq!(Opcode::_16Bit(B16::ADD_Imm8),fourth);
 
    Ok(())
 }
@@ -171,53 +215,85 @@ pub fn should_recognise_add_with_immediates()-> Result<(),std::io::Error>{
 #[test]
 pub fn should_recognise_add_with_registers()-> Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/addr.s");
-   write_asm(path,b".text\n.thumb\nADD r3,r2,r1\nADD r0,r1\n")?;
+   write_asm(path,b".text\n.thumb\nADD r3,r2,r7\nADD r7,r12\n")?;
    let elf = asm_file_to_elf_with_t2_arm_encoding(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
-   let mut first_instr: [u8;2] = [0;2];
-   first_instr[0] = opcodes[0];
-   first_instr[1] = opcodes[1];
+   let first_instr: [u8;2] = [opcodes[0], opcodes[1]];
+   let sec_instr: [u8;2] = [opcodes[2],opcodes[3]];
 
    let first: Opcode = (&first_instr).into();
 
-   println!("opcode raw bin{:?}",opcodes);
+   if let Some(Operands::RegisterTriplet(rd0,ra0,ra1)) = get_operands(&Opcode::_16Bit(B16::ADDS_REG),&first_instr){
+      assert_eq!((rd0.0,ra0.0,ra1.0), (3,2,7));
+   }else {
+      panic!("could not decode ADD_reg operands");
+   }
+
+   let second: Opcode = (&sec_instr).into();
+   if let Some(Operands::RegisterPair(rd1,rb0)) = get_operands(&Opcode::_16Bit(B16::ADDS_REG_T2),&sec_instr){
+      assert_eq!((rd1.0,rb0.0), (7,12));
+   }else{
+      panic!("could not decode ADD_reg T2 operands");
+   }
+
    std::fs::remove_file(path)?;
    std::fs::remove_file(elf)?;
-   assert_eq!(Opcode::ADDS_REG,first);
+   assert_eq!(Opcode::_16Bit(B16::ADDS_REG),first);
+   assert_eq!(Opcode::_16Bit(B16::ADDS_REG_T2),second);
    Ok(())
 }
 
 #[test]
 pub fn should_recognise_add_sp_and_immediate() -> Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/add_sp_imm.s");
-   write_asm(path,b".text\n.thumb\nADD r7,SP,#64\nADD SP,SP,#128\nADD r0,SP,r0\nADD SP,r6\n")?;
+   write_asm(
+      path,
+      b".text\n.thumb\nADD r7,SP,#64\nADD SP,SP,#128\nADD r0,SP,r0\nADD SP,r6\n"
+   )?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
-   let mut first_instr: [u8;2] = [0;2];
-   first_instr[0] = opcodes[0];
-   first_instr[1] = opcodes[1];
-   let mut sec_instr: [u8;2] = [0;2];
-   sec_instr[0] = opcodes[2];
-   sec_instr[1] = opcodes[3];
-   let mut third_instr: [u8;2] = [0;2];
-   third_instr[0] = opcodes[4];
-   third_instr[1] = opcodes[5];
-   let mut fourth_instr: [u8;2] = [0;2];
-   fourth_instr[0] = opcodes[6];
-   fourth_instr[1] = opcodes[7];
+   let first_instr: [u8;2] = [opcodes[0], opcodes[1]];
+   let sec_instr: [u8;2] = [opcodes[2], opcodes[3]];
+   let third_instr: [u8;2] = [opcodes[4],opcodes[5]];
+   let fourth_instr: [u8;2] = [opcodes[6],opcodes[7]];
 
    let first: Opcode = (&first_instr).into();
+
+   if let Some(Operands::ADD_REG_SP_IMM8(dest_0,imm8)) = get_operands(&Opcode::_16Bit(B16::ADD_REG_SP_IMM8), &first_instr){
+      assert_eq!((dest_0.0,imm8.0),(7,64/4));
+   }else{
+      panic!("could not decode add_rep_sp_imm8 operands");
+   }
+
    let second: Opcode = (&sec_instr).into();
+
+   if let Some(Operands::INCR_SP_BY_IMM7(imm7)) = get_operands(&Opcode::_16Bit(B16::INCR_SP_BY_IMM7),&sec_instr){
+      assert_eq!(128/4,imm7.0);
+   }else{
+      panic!("could not decode add_rep_sp_imm7 operands");
+   }
+
    let third: Opcode = (&third_instr).into();
+   if let Some(Operands::INCR_REG_BY_SP(reg)) = get_operands(&Opcode::_16Bit(B16::INCR_REG_BY_SP),&third_instr){
+      assert_eq!(reg.0,0);
+   }else{
+      panic!("could not decode incr reg by sp operands");
+   }
+
    let fourth: Opcode = (&fourth_instr).into();
+
+   if let Some(Operands::INCR_SP_BY_REG(reg_1)) = get_operands(&Opcode::_16Bit(B16::INCR_SP_BY_REG), &fourth_instr){
+      assert_eq!(reg_1.0,6);
+   }else{
+      panic!("could notdecode incr sp by reg operands");
+   }
 
    std::fs::remove_file(path)?;
    std::fs::remove_file(elf)?;
-   assert_eq!(Opcode::ADD_REG_SP_IMM8,first);
-   assert_eq!(Opcode::INCR_SP_BY_IMM7,second);
-   assert_eq!(Opcode::INCR_REG_BY_SP,third);
-   assert_eq!(Opcode::INCR_SP_BY_REG,fourth);
-
+   assert_eq!(Opcode::_16Bit(B16::ADD_REG_SP_IMM8),first);
+   assert_eq!(Opcode::_16Bit(B16::INCR_SP_BY_IMM7),second);
+   assert_eq!(Opcode::_16Bit(B16::INCR_REG_BY_SP),third);
+   assert_eq!(Opcode::_16Bit(B16::INCR_SP_BY_REG),fourth);
    Ok(())
 }
 
@@ -225,12 +301,20 @@ pub fn should_recognise_add_sp_and_immediate() -> Result<(),std::io::Error>{
 pub fn should_recognise_adr()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/adr.s");
 
-   let instruction = decode_single_16b_instruction(
+   let bytes = assemble(
       path,
-      b".text\n.thumb\nADR r0,_some_lbl\nNOP\n_some_lbl:"
+      b".text\n.thumb\nADR r7,_some_lbl\nNOP\n_some_lbl:"
    ).unwrap();
+   let instruction: [u8;2] = [bytes[0],bytes[1]];
+   let adr: Opcode = (&instruction).into();
 
-   assert_eq!(Opcode::ADR,instruction);
+   if let Some(Operands::ADR(dest,_literal)) =  get_operands(&Opcode::_16Bit(B16::ADR),&instruction){
+      assert_eq!(dest.0,7);
+   }else{
+      panic!("could not decode adr operands");
+   }
+
+   assert_eq!(Opcode::_16Bit(B16::ADR),adr);
    Ok(())
 }
 
@@ -243,48 +327,58 @@ pub fn should_recognise_adr_with_alternate_syntax()->Result<(),std::io::Error>{
       b".text\n.thumb\nADD r0,PC,#8\n"
    ).unwrap();
 
-   assert_eq!(Opcode::ADR,instruction);
+   assert_eq!(Opcode::_16Bit(B16::ADR),instruction);
    Ok(())
 }
 
 #[test]
 pub fn should_recognise_and_instruction()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/and.s");
-   write_asm(path,b".text\n.thumb\nAND r0,r1\nAND r2,r3,r2\n")?;
+   write_asm(path,b".text\n.thumb\nAND r7,r1\nAND r2,r3,r2\n")?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
-   let mut first_instr: [u8;2] = [0;2];
-   first_instr[0] = opcodes[0];
-   first_instr[1] = opcodes[1];
+   let first_instr: [u8;2] = [opcodes[0],opcodes[1]];
 
    let first: Opcode = (&first_instr).into();
 
+   if let Some(Operands::RegisterPair(dest,reg)) = get_operands(&Opcode::_16Bit(B16::ANDS),&first_instr){
+      assert_eq!((dest.0,reg.0),(7,1));
+   }else{
+      panic!("could not decode 'and' instruction operands");
+   }
+
    std::fs::remove_file(path)?;
    std::fs::remove_file(elf)?;
-   assert_eq!(Opcode::ANDS,first);
+   assert_eq!(Opcode::_16Bit(B16::ANDS),first);
    Ok(())
 }
 
 #[test]
 pub fn should_recognise_asr()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/asr.s");
-   write_asm(path,b".text\n.thumb\nASR r0,r1,#24\nASR r0,r1\n")?;
+   write_asm(path,b".text\n.thumb\nASR r7,r5,#24\nASR r3,r5\n")?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
-   let mut first_instr: [u8;2] = [0;2];
-   first_instr[0] = opcodes[0];
-   first_instr[1] = opcodes[1];
-   let mut second_instr: [u8;2] = [0;2];
-   second_instr[0] = opcodes[2];
-   second_instr[1] = opcodes[3];
+   let first_instr: [u8;2] = [opcodes[0],opcodes[1]];
+   let second_instr: [u8;2] = [opcodes[2],opcodes[3]];
 
    let first: Opcode = (&first_instr).into();
+   if let Some(Operands::ASRS_Imm5(dest,src,imm5)) = get_operands(&Opcode::_16Bit(B16::ASRS_Imm5),&first_instr){
+      assert_eq!((dest.0,src.0,imm5.0),(7,5,24));
+   }else{
+      panic!("did not parse ASR imm5 operands");
+   }
+
    let second: Opcode = (&second_instr).into();
+
+   if let Some(Operands::RegisterPair(dest_1,other)) = get_operands(&Opcode::_16Bit(B16::ASRS_REG),&second_instr){
+      assert_eq!((dest_1.0,other.0),(3,5));
+   }
 
    std::fs::remove_file(path)?;
    std::fs::remove_file(elf)?;
-   assert_eq!(Opcode::ASRS_Imm5,first);
-   assert_eq!(Opcode::ASRS_REG,second);
+   assert_eq!(Opcode::_16Bit(B16::ASRS_Imm5),first);
+   assert_eq!(Opcode::_16Bit(B16::ASRS_REG),second);
    Ok(())
 }
 
@@ -337,21 +431,21 @@ pub fn should_recognise_16bit_branch_instructions()->Result<(),std::io::Error>{
    assert_eq!(
       decoded_opcodes,
       vec![
-         Opcode::B_ALWAYS,
-         Opcode::BEQ,
-         Opcode::BNEQ,
-         Opcode::B_CARRY_IS_SET,
-         Opcode::B_CARRY_IS_CLEAR,
-         Opcode::B_IF_NEGATIVE,
-         Opcode::B_IF_POSITIVE,
-         Opcode::B_IF_OVERFLOW,
-         Opcode::B_IF_NO_OVERFLOW,
-         Opcode::B_UNSIGNED_HIGHER,
-         Opcode::B_UNSIGNED_LOWER_OR_SAME,
-         Opcode::B_GTE,
-         Opcode::B_LT,
-         Opcode::B_GT,
-         Opcode::B_LTE
+         Opcode::_16Bit(B16::B_ALWAYS),
+         Opcode::_16Bit(B16::BEQ),
+         Opcode::_16Bit(B16::BNEQ),
+         Opcode::_16Bit(B16::B_CARRY_IS_SET),
+         Opcode::_16Bit(B16::B_CARRY_IS_CLEAR),
+         Opcode::_16Bit(B16::B_IF_NEGATIVE),
+         Opcode::_16Bit(B16::B_IF_POSITIVE),
+         Opcode::_16Bit(B16::B_IF_OVERFLOW),
+         Opcode::_16Bit(B16::B_IF_NO_OVERFLOW),
+         Opcode::_16Bit(B16::B_UNSIGNED_HIGHER),
+         Opcode::_16Bit(B16::B_UNSIGNED_LOWER_OR_SAME),
+         Opcode::_16Bit(B16::B_GTE),
+         Opcode::_16Bit(B16::B_LT),
+         Opcode::_16Bit(B16::B_GT),
+         Opcode::_16Bit(B16::B_LTE)
       ]
    );
    Ok(())
@@ -370,12 +464,21 @@ fn decode_16b_opcodes(bytes: &[u8])->Vec<Opcode>{
 fn should_recognise_bic()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/bic.s");
 
-   let instruction = decode_single_16b_instruction(
+   let bytes = assemble(
       path,
-      b".text\n.thumb\nBIC r0,r1\n"
+      b".text\n.thumb\nBIC r5,r2\n"
    ).unwrap();
+   let hw: [u8;2] = [bytes[0],bytes[1]];
 
-   assert_eq!(Opcode::BIT_CLEAR_REGISTER,instruction);
+   if let Some(Operands::RegisterPair(dest,reg)) = get_operands(&Opcode::_16Bit(B16::BIT_CLEAR_REGISTER), &hw){
+      println!("{:?},{}",dest,reg);
+      assert_eq!((dest.0,reg.0),(5,2));
+   }else{
+      panic!("could not decode bic operands");
+   }
+
+   let bic: Opcode = Opcode::from(&hw);
+   assert_eq!(Opcode::_16Bit(B16::BIT_CLEAR_REGISTER),bic);
    Ok(())
 }
 
@@ -383,12 +486,20 @@ fn should_recognise_bic()->Result<(),std::io::Error>{
 fn should_recognise_breakpoint()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/bkpt.s");
    
-   let instruction = decode_single_16b_instruction(
+   let bytes = assemble(
       path,
       b".text\n.thumb\nBKPT #255\n"
    ).unwrap();
+   let hw: [u8;2] = [bytes[0],bytes[1]];
 
-   assert_eq!(Opcode::BREAKPOINT,instruction);
+   if let Some(Operands::BREAKPOINT(imm8)) = get_operands(&Opcode::_16Bit(B16::BREAKPOINT), &hw){
+      assert_eq!(255,imm8.0);
+   }else{
+      panic!("could not detect breakpoint arguements");
+   }
+
+   let instruction = Opcode::from(&hw);
+   assert_eq!(Opcode::_16Bit(B16::BREAKPOINT),instruction);
    Ok(())
 }
 
@@ -404,7 +515,7 @@ fn should_recognise_bl()->Result<(),std::io::Error>{
 
    std::fs::remove_file(path)?;
    std::fs::remove_file(elf)?;
-   assert_eq!(Opcode::BR_AND_LNK,first);
+   assert_eq!(Opcode::_32Bit(B32::BR_AND_LNK),first);
    Ok(())
 }
 
@@ -417,7 +528,7 @@ fn should_recognise_blx()->Result<(),std::io::Error>{
       b".text\n.thumb\nBLX r0\n"
    ).unwrap();
 
-   assert_eq!(Opcode::BR_LNK_EXCHANGE,instruction);
+   assert_eq!(Opcode::_16Bit(B16::BR_LNK_EXCHANGE),instruction);
    Ok(())
 }
 
@@ -430,7 +541,7 @@ fn should_recognise_bx()->Result<(),std::io::Error>{
       b".text\n.thumb\nBX r0\n"
    ).unwrap();
 
-   assert_eq!(Opcode::BR_EXCHANGE,instruction);
+   assert_eq!(Opcode::_16Bit(B16::BR_EXCHANGE),instruction);
    Ok(())
 }
 
@@ -443,7 +554,7 @@ fn should_recognise_cmn()->Result<(),std::io::Error>{
       b".text\n.thumb\nCMN r0,r1\n"
    ).unwrap();
 
-   assert_eq!(Opcode::CMP_NEG_REG,instruction);
+   assert_eq!(Opcode::_16Bit(B16::CMP_NEG_REG),instruction);
    Ok(())
 }
 
@@ -468,9 +579,9 @@ fn should_recognise_cmp()->Result<(),std::io::Error>{
       b".text\n.thumb\nCMP r8,r9\n"
    ).unwrap();
 
-   assert_eq!(Opcode::CMP_Imm8,inst_imm8);
-   assert_eq!(Opcode::CMP_REG_T1,inst_cmp_t1);
-   assert_eq!(Opcode::CMP_REG_T2,inst_cmp_t2);
+   assert_eq!(Opcode::_16Bit(B16::CMP_Imm8),inst_imm8);
+   assert_eq!(Opcode::_16Bit(B16::CMP_REG_T1),inst_cmp_t1);
+   assert_eq!(Opcode::_16Bit(B16::CMP_REG_T2),inst_cmp_t2);
    Ok(())
 }
 
@@ -483,7 +594,7 @@ fn should_recognise_xor()->Result<(),std::io::Error>{
       b".text\n.thumb\nEOR r0,r1\n"
    ).unwrap();
 
-   assert_eq!(Opcode::XOR_REG,instr);
+   assert_eq!(Opcode::_16Bit(B16::XOR_REG),instr);
    Ok(())
 }
 
@@ -502,8 +613,8 @@ fn should_recognise_ldm()->Result<(),std::io::Error>{
       b".text\n.thumb\nLDM r0!,{r1,r2,r3}\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LDM,instr_exm_1);
-   assert_eq!(Opcode::LDM,instr_exm_2);
+   assert_eq!(Opcode::_16Bit(B16::LDM),instr_exm_1);
+   assert_eq!(Opcode::_16Bit(B16::LDM),instr_exm_2);
    Ok(())
 }
 
@@ -534,10 +645,10 @@ fn should_recognise_ldr()->Result<(),std::io::Error>{
       b".text\n.thumb\nLDR r1,[r2,r4]\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LDR_Imm5,code_imm5);
-   assert_eq!(Opcode::LDR_SP_Imm8,code_imm8);
-   assert_eq!(Opcode::LDR_PC_Imm8,code_pc_imm8_alt);
-   assert_eq!(Opcode::LDR_REGS,code_reg);
+   assert_eq!(Opcode::_16Bit(B16::LDR_Imm5),code_imm5);
+   assert_eq!(Opcode::_16Bit(B16::LDR_SP_Imm8),code_imm8);
+   assert_eq!(Opcode::_16Bit(B16::LDR_PC_Imm8),code_pc_imm8_alt);
+   assert_eq!(Opcode::_16Bit(B16::LDR_REGS),code_reg);
    Ok(())
 }
 
@@ -555,8 +666,8 @@ fn should_recognise_ldrb()->Result<(),std::io::Error>{
       b".text\n.thumb\n LDRB r0,[r3,r5]\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LDRB_Imm5,imm5);
-   assert_eq!(Opcode::LDRB_REGS,regs);
+   assert_eq!(Opcode::_16Bit(B16::LDRB_Imm5),imm5);
+   assert_eq!(Opcode::_16Bit(B16::LDRB_REGS),regs);
    Ok(())
 }
 
@@ -574,8 +685,8 @@ fn should_recognise_ldrh()->Result<(),std::io::Error>{
       b".text\n.thumb\nLDRH r2,[r1,r7]\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LDRH_Imm5,imm5);
-   assert_eq!(Opcode::LDRH_REGS,regs);
+   assert_eq!(Opcode::_16Bit(B16::LDRH_Imm5),imm5);
+   assert_eq!(Opcode::_16Bit(B16::LDRH_REGS),regs);
    Ok(())
 }
 
@@ -588,7 +699,7 @@ fn should_recognise_ldrsb()->Result<(),std::io::Error>{
       b".text\n.thumb\nLDRSB r0,[r1,r7]\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LDRSB_REGS,regs);
+   assert_eq!(Opcode::_16Bit(B16::LDRSB_REGS),regs);
    Ok(())
 }
 
@@ -601,7 +712,7 @@ fn should_recognise_ldrsh()->Result<(),std::io::Error>{
       b".text\n.thumb\nLDRSH r0,[r1,r7]\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LDRSH_REGS,regs);
+   assert_eq!(Opcode::_16Bit(B16::LDRSH_REGS),regs);
    Ok(())
 }
 
@@ -618,8 +729,8 @@ fn should_recognise_lsl()->Result<(),std::io::Error>{
       b".text\n.thumb\nLSL r0,r7\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LSL_Imm5,imm5);
-   assert_eq!(Opcode::LSL_REGS,regs);
+   assert_eq!(Opcode::_16Bit(B16::LSL_Imm5),imm5);
+   assert_eq!(Opcode::_16Bit(B16::LSL_REGS),regs);
    Ok(())
 }
 
@@ -636,8 +747,8 @@ fn should_recognise_lsr()->Result<(),std::io::Error>{
       b".text\n.thumb\nlsr r0,r7\n"
    ).unwrap();
 
-   assert_eq!(Opcode::LSR_Imm5,imm5);
-   assert_eq!(Opcode::LSR_REGS,regs);
+   assert_eq!(Opcode::_16Bit(B16::LSR_Imm5),imm5);
+   assert_eq!(Opcode::_16Bit(B16::LSR_REGS),regs);
    Ok(())
 }
 
@@ -661,9 +772,9 @@ fn should_recognise_mov()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::MOV_Imm8,imm8);
-   assert_eq!(Opcode::MOV_REGS_T1,regs_t1);
-   assert_eq!(Opcode::MOV_REGS_T2,regs_t2);
+   assert_eq!(Opcode::_16Bit(B16::MOV_Imm8),imm8);
+   assert_eq!(Opcode::_16Bit(B16::MOV_REGS_T1),regs_t1);
+   assert_eq!(Opcode::_16Bit(B16::MOV_REGS_T2),regs_t2);
    Ok(())
 }
 
@@ -673,7 +784,7 @@ fn should_recognise_mul()->Result<(),std::io::Error>{
 
    let regs = decode_single_16b_instruction(path, b".text\n.thumb\nMUL r0,r1\n").unwrap();
    
-   assert_eq!(Opcode::MUL,regs);
+   assert_eq!(Opcode::_16Bit(B16::MUL),regs);
    Ok(())
 }
 
@@ -683,7 +794,7 @@ fn should_recognise_mvn()->Result<(),std::io::Error>{
 
    let regs = decode_single_16b_instruction(path, b".text\n.thumb\nMVN r0,r7\n").unwrap();
 
-   assert_eq!(Opcode::MVN,regs);
+   assert_eq!(Opcode::_16Bit(B16::MVN),regs);
    Ok(())
 }
 
@@ -697,7 +808,7 @@ fn should_recognise_nop()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::NOP,encoding_t2);
+   assert_eq!(Opcode::_16Bit(B16::NOP),encoding_t2);
    Ok(())
 }
 
@@ -707,7 +818,7 @@ fn should_recognise_orr()->Result<(),std::io::Error>{
 
    let t1 = decode_single_16b_instruction(path, b".text\n.thumb\nORR r0,r1\n").unwrap();
 
-   assert_eq!(Opcode::ORR,t1);
+   assert_eq!(Opcode::_16Bit(B16::ORR),t1);
    Ok(())
 }
 
@@ -716,8 +827,10 @@ fn should_recognise_pop()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/pop.s");
 
    let t1 = decode_single_16b_instruction(path, b".text\n.thumb\nPOP {r0,r1}\n").unwrap();
+   let sc = decode_single_16b_instruction(path, b".text\n.thumb\nPOP {r0,PC}\n").unwrap();
 
-   assert_eq!(Opcode::POP,t1);
+   assert_eq!(Opcode::_16Bit(B16::POP),t1);
+   assert_eq!(Opcode::_16Bit(B16::POP),sc);
    Ok(())
 }
 
@@ -727,7 +840,7 @@ fn should_recognise_push()->Result<(),std::io::Error>{
 
    let t1 = decode_single_16b_instruction(path, b".text\n.thumb\nPUSH {r0,r1}\n").unwrap();
 
-   assert_eq!(Opcode::PUSH,t1);
+   assert_eq!(Opcode::_16Bit(B16::PUSH),t1);
    Ok(())
 }
 
@@ -739,9 +852,9 @@ fn should_recognise_rev()->Result<(),std::io::Error>{
    let c16 = decode_single_16b_instruction(path, b".text\n.thumb\nREV16 r0,r1\n").unwrap();
    let sh = decode_single_16b_instruction(path, b".text\n.thumb\nREVSH r0,r1\n").unwrap();
 
-   assert_eq!(Opcode::REV,t1);
-   assert_eq!(Opcode::REV_16,c16);
-   assert_eq!(Opcode::REVSH,sh);
+   assert_eq!(Opcode::_16Bit(B16::REV),t1);
+   assert_eq!(Opcode::_16Bit(B16::REV_16),c16);
+   assert_eq!(Opcode::_16Bit(B16::REVSH),sh);
    Ok(())
 }
 
@@ -751,7 +864,7 @@ fn should_recognise_ror()->Result<(),std::io::Error>{
 
    let t1 = decode_single_16b_instruction(path, b".text\n.thumb\nROR r0,r7\n").unwrap();
 
-   assert_eq!(Opcode::ROR,t1);
+   assert_eq!(Opcode::_16Bit(B16::ROR),t1);
    Ok(())
 }
 
@@ -765,7 +878,7 @@ fn should_recognise_rsb()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::RSB,t1);
+   assert_eq!(Opcode::_16Bit(B16::RSB),t1);
    Ok(())
 }
 
@@ -779,7 +892,7 @@ fn should_recognise_sbc()->Result<(),std::io::Error>{
       b".text\n.thumb\nSBC r0,r1\n"
    ).unwrap();
 
-   assert_eq!(Opcode::SBC,t1);
+   assert_eq!(Opcode::_16Bit(B16::SBC),t1);
    Ok(())
 }
 
@@ -793,7 +906,7 @@ fn should_recognise_sev()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::SEV,t1);
+   assert_eq!(Opcode::_16Bit(B16::SEV),t1);
    Ok(())
 }
 
@@ -806,7 +919,7 @@ fn should_recognise_stm()->Result<(),std::io::Error>{
       b".text\n.thumb\nSTM r0!,{r1,r3}\n"
    ).unwrap();
 
-   assert_eq!(Opcode::STM,t1);
+   assert_eq!(Opcode::_16Bit(B16::STM),t1);
    Ok(())
 }
 
@@ -818,9 +931,9 @@ fn should_recognise_str()->Result<(),std::io::Error>{
    let t2 = decode_single_16b_instruction( path, b".text\n.thumb\nSTR r0, [SP, #224]\n").unwrap();
    let reg = decode_single_16b_instruction( path, b".text\n.thumb\nSTR r0, [r1, r2]\n").unwrap();
 
-   assert_eq!(Opcode::STR_Imm5,t1);
-   assert_eq!(Opcode::STR_Imm8,t2);
-   assert_eq!(Opcode::STR_REG,reg);
+   assert_eq!(Opcode::_16Bit(B16::STR_Imm5),t1);
+   assert_eq!(Opcode::_16Bit(B16::STR_Imm8),t2);
+   assert_eq!(Opcode::_16Bit(B16::STR_REG),reg);
    Ok(())
 }
 
@@ -831,8 +944,8 @@ fn should_recognise_strb()->Result<(),std::io::Error>{
    let im = decode_single_16b_instruction(path, b".text\n.thumb\nSTRB r0, [r1,#17]\n").unwrap();
    let reg = decode_single_16b_instruction(path, b".text\n.thumb\nSTRB r0, [r1,r2]\n").unwrap();
 
-   assert_eq!(Opcode::STRB_Imm5,im);
-   assert_eq!(Opcode::STRB_REG,reg);
+   assert_eq!(Opcode::_16Bit(B16::STRB_Imm5),im);
+   assert_eq!(Opcode::_16Bit(B16::STRB_REG),reg);
    Ok(())
 }
 
@@ -843,8 +956,8 @@ fn should_recognise_strh()->Result<(),std::io::Error>{
    let im = decode_single_16b_instruction(path, b".text\n.thumb\nstrh r0, [r1,#62]\n").unwrap();
    let reg = decode_single_16b_instruction(path, b".text\n.thumb\nstrh r0, [r1,r2]\n").unwrap();
 
-   assert_eq!(Opcode::STRH_Imm5,im);
-   assert_eq!(Opcode::STRH_REG,reg);
+   assert_eq!(Opcode::_16Bit(B16::STRH_Imm5),im);
+   assert_eq!(Opcode::_16Bit(B16::STRH_REG),reg);
    Ok(())
 }
 
@@ -857,10 +970,10 @@ fn should_recognise_sub()->Result<(),std::io::Error>{
    let reg = decode_single_16b_instruction(path, b".text\n.thumb\nSUB r0,r1,r3\n").unwrap();
    let sp  = decode_single_16b_instruction(path, b".text\n.thumb\nSUB sp,sp,#16\n").unwrap();
 
-   assert_eq!(Opcode::SUB_Imm3,im3);
-   assert_eq!(Opcode::SUB_Imm8,im8);
-   assert_eq!(Opcode::SUB_REG,reg);
-   assert_eq!(Opcode::SUB_SP_Imm7,sp);
+   assert_eq!(Opcode::_16Bit(B16::SUB_Imm3),im3);
+   assert_eq!(Opcode::_16Bit(B16::SUB_Imm8),im8);
+   assert_eq!(Opcode::_16Bit(B16::SUB_REG),reg);
+   assert_eq!(Opcode::_16Bit(B16::SUB_SP_Imm7),sp);
    Ok(())
 }
 
@@ -870,7 +983,7 @@ fn should_recognise_svc()->Result<(),std::io::Error>{
 
    let svc = decode_single_16b_instruction(path, b".text\n.thumb\nSVC #15\n").unwrap();
 
-   assert_eq!(Opcode::SVC,svc);
+   assert_eq!(Opcode::_16Bit(B16::SVC),svc);
    Ok(())
 }
 
@@ -881,8 +994,8 @@ fn should_recognise_sxt()->Result<(),std::io::Error>{
    let sxtb = decode_single_16b_instruction(path, b".text\n.thumb\n SXTB r0,r1\n").unwrap();
    let sxth = decode_single_16b_instruction(path, b".text\n.thumb\n SXTH r0,r1\n").unwrap();
 
-   assert_eq!(Opcode::SXTB,sxtb);
-   assert_eq!(Opcode::SXTH,sxth);
+   assert_eq!(Opcode::_16Bit(B16::SXTB),sxtb);
+   assert_eq!(Opcode::_16Bit(B16::SXTH),sxth);
    Ok(())
 }
 
@@ -892,7 +1005,7 @@ fn should_recognise_tst()->Result<(),std::io::Error>{
 
    let t1 = decode_single_16b_instruction(path, b".text\n.thumb\n TST r0,r1\n").unwrap();
 
-   assert_eq!(Opcode::TST,t1);
+   assert_eq!(Opcode::_16Bit(B16::TST),t1);
    Ok(())
 }
 
@@ -906,7 +1019,7 @@ fn should_recognise_udfw()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::UNDEFINED,t1);
+   assert_eq!(Opcode::_32Bit(B32::UNDEFINED),t1);
    Ok(())
 }
 
@@ -926,8 +1039,8 @@ fn should_recognise_uxt()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::UXTB,uxtb);
-   assert_eq!(Opcode::UXTH,uxth);
+   assert_eq!(Opcode::_16Bit(B16::UXTB),uxtb);
+   assert_eq!(Opcode::_16Bit(B16::UXTH),uxth);
    Ok(())
 }
 
@@ -947,8 +1060,8 @@ fn should_recognise_wf()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::WFE,wfe);
-   assert_eq!(Opcode::WFI,wfi);
+   assert_eq!(Opcode::_16Bit(B16::WFE),wfe);
+   assert_eq!(Opcode::_16Bit(B16::WFI),wfi);
    Ok(())
 }
 
@@ -962,6 +1075,6 @@ fn should_recognise_yield()->Result<(),std::io::Error>{
       asm_file_to_elf_with_t2_arm_encoding
    ).unwrap();
 
-   assert_eq!(Opcode::YIELD,yield_opc);
+   assert_eq!(Opcode::_16Bit(B16::YIELD),yield_opc);
    Ok(())
 }

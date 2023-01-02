@@ -1,49 +1,98 @@
 pub mod interpreter;
-pub mod instructions;
-pub mod registers;
 pub mod decode;
+pub mod decode_operands;
 
+use std::fmt;
 // are little endian
 //---
-pub type Byte = u8;
 pub type HalfWord = [u8;2];
 pub type Word = [u8;4];
-pub type DoubleWord = [u8;8];
-pub type Pointer = Word;
 //---
-#[inline]
-pub fn get_bit(bit: u32,word: u32)-> u32{
-   println!("{:04b} & {:04b}",(1<<bit),word);
-   ((1 << bit) & word) >> bit
+
+#[derive(PartialEq)]
+pub struct Register(pub u8);
+impl From<u8> for Register{
+   fn from(a: u8) -> Self {
+      Self(a)
+   }
 }
 
-#[inline]
-pub fn clear_bit(bit: u32,word: u32)-> u32{
-   let mask = !(1 << bit);
-   println!("{:04b} & {:04b}",word,mask);
-   word & mask
+impl From<u32> for Register{
+   fn from(a: u32) -> Self {
+      Self(a as u8)
+   }
 }
 
-#[inline]
-pub fn set_bit(bit: u32,word: u32)-> u32{
-   word | (1 << bit)
+impl fmt::Display for Register{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      write!(f,"r{}",self.0)
+   }
 }
 
-#[inline]
-pub fn from_arm_bytes(word: Word)-> u32{
-   u32::from_le_bytes(word)
+impl fmt::Debug for Register{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      write!(f,"r{}",self.0)
+   }
 }
 
-#[inline]
-pub const fn from_arm_bytes_16b(hw :HalfWord)->u16{
-   u16::from_le_bytes(hw)
+#[derive(PartialEq)]
+pub struct SrcRegister(pub u8);
+impl From<u8> for SrcRegister{
+   fn from(a: u8) -> Self {
+      Self(a)
+   }
 }
 
-#[inline]
-pub fn u16_to_arm_hword(v: u16)->u16{
-   u16::to_le(v)
+impl From<u32> for SrcRegister{
+   fn from(a: u32) -> Self {
+      Self(a as u8)
+   }
 }
-#[inline]
-pub fn u32_to_arm_bytes(v: u32)-> [u8;4]{
-   u32::to_le_bytes(v)
+
+impl fmt::Debug for SrcRegister{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      write!(f,"Rs{}",self.0)
+   }
+}
+
+impl fmt::Display for SrcRegister{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      write!(f,"r{}",self.0)
+   }
+}
+
+#[derive(PartialEq)]
+pub struct DestRegister(pub u8);
+impl From<u8> for DestRegister{
+   fn from(a: u8) -> Self {
+      Self(a)
+   }
+}
+
+impl From<u32> for DestRegister{
+   fn from(a: u32) -> Self {
+      Self(a as u8)
+   }
+}
+
+impl fmt::Debug for DestRegister{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      write!(f,"Rd{}",self.0)
+   }
+}
+
+impl fmt::Display for DestRegister{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      write!(f,"r{}",self.0)
+   }
+}
+use crate::{binutils::BitField, system::SysErr};
+
+pub type Literal<const L: u32> = BitField<L>;
+
+pub trait Intruction{
+   type IOperand;
+   fn has_opcode(hw: &HalfWord)->bool;
+   fn get_operands(hw: &HalfWord)->Self::IOperand;
+   fn execute(args: Self::IOperand)->Result<(),SysErr>;
 }

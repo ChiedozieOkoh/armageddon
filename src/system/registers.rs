@@ -1,9 +1,17 @@
-use crate::asm::{clear_bit,get_bit,from_arm_bytes,set_bit,u32_to_arm_bytes};
+use crate::binutils::{get_bit,set_bit,clear_bit,u32_to_arm_bytes,from_arm_bytes};
 use crate::asm::Word;
 pub type Apsr = Word;//Application Program Status Register
 
-pub struct CoreRegisters{
-   memory: [u32;13] //R0 -> R12
+
+pub struct Registers{
+   pub generic: [u32;13], //R0 -> R12
+   special: [u32;3] //have restrictions on how they can used
+}
+
+impl Registers{
+   pub fn create()->Self{
+      Self{generic: [0;13],special: [0;3]}
+   }
 }
 
 pub fn get_negative_bit(apsr: &Apsr)-> u32{
