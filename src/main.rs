@@ -15,7 +15,6 @@ use elf::decoder::ElfError;
 
 use crate::asm::interpreter::print_assembly;
 fn main() {
-    println!("{:04b}",3);
     assert_eq!(get_bit(1,3),1);
     assert_eq!(get_bit(0,3),1);
     assert_eq!(get_bit(2,3),0);
@@ -24,9 +23,17 @@ fn main() {
     assert_eq!(clear_bit(1, 10),8);
 
    let path = Path::new("assembly_tests/adc.s");
-   let src_code = b".text\n\t.thumb\nADC r0, r1\nLDM r7!, {r1,r2,r3}\nLDM r7,{r1,r7}\nLDR r0,[r1,#20]\nbal _label\n_label:\n";
+   let src_code = concat!(
+      ".text\n.thumb\n",
+      "ADC r0,r1\n",
+      "LDM r7!, {r1,r2,r3}\n",
+      "LDR r0,[r1,#20]\n",
+      "BAL _label\n",
+      "_label:\n",
+      "SVC #240\n"
+   );
 
-   let bytes = assemble(&path,src_code).unwrap();
+   let bytes = assemble(&path,src_code.as_bytes()).unwrap();
 
    print_assembly(&bytes[..]);
 }

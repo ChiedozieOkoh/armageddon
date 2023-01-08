@@ -11,14 +11,12 @@ use super::{
    Word
 };
 
-use crate::asm::decode::{Opcode,B16};
+use crate::asm::decode::{Opcode,B16,B32};
 use crate::binutils::{from_arm_bytes_16b, get_bitfield, BitList};
 
 #[allow(non_camel_case_types)]
 #[derive(Debug)]
 pub enum Operands{
-   ADD_Imm3(DestRegister,SrcRegister,Literal<3>),
-   ADD_Imm8(DestRegister,Literal<8>),
    ADD_REG_SP_IMM8(DestRegister,Literal<8>),
    INCR_SP_BY_IMM7(Literal<7>),
    INCR_REG_BY_SP(Register),
@@ -28,26 +26,32 @@ pub enum Operands{
    COND_BRANCH(Literal<8>),
    B_ALWAYS(Literal<11>),
    BREAKPOINT(Literal<8>),
+   BR_LNK(i32),
    BR_LNK_EXCHANGE(Register),
    BR_EXCHANGE(Register),
    CMP_Imm8(Register,Literal<8>),
-   LDM(Register,BitList),
    LDR_Imm5(DestRegister,SrcRegister,Literal<5>),
    LDR_Imm8(DestRegister,Literal<8>),
    LDR_REG(DestRegister,SrcRegister,Register),
    LS_Imm5(DestRegister,SrcRegister,Literal<5>),
-   MOV_Imm8(DestRegister,Literal<8>),
    MOV_REG(DestRegister,SrcRegister),
+   DestImm8(DestRegister,Literal<8>),
+   LoadableList(Register,BitList),
    RegisterPair(DestRegister,Register),
+   RegPairImm3(DestRegister,SrcRegister,Literal<3>),
    RegisterTriplet(DestRegister,SrcRegister,Register),
    PureRegisterPair(Register,Register),
-   MVN(DestRegister,SrcRegister),
    RegisterList(BitList),
+   STR_Imm5(SrcRegister,Register,Literal<5>),
+   STR_Imm8(SrcRegister,Literal<8>),
+   STR_REG(SrcRegister,Register,Register),
+   SP_SUB(Literal<7>),
+   Byte(Literal<8>),
 }
 
 pub fn pretty_print(operands: &Operands)->String{
    match operands{
-      Operands::LDM(base_register,register_list) => {
+      Operands::LoadableList(base_register,register_list) => {
          let registers = get_set_bits(*register_list);
          let mut list_str = String::new();
          if (1 << base_register.0) & register_list > 0 {
@@ -72,13 +76,12 @@ pub fn pretty_print(operands: &Operands)->String{
          fmt_register_list(registers)
       },
       _ => {
-         println!("tt--{:?}",operands);
+         //println!("tt--{:?}",operands);
          let dbg_operands = format!("{:?}",operands);
          remove_everything_outside_brackets(&dbg_operands)
       }
    }
 }
-
 
 fn fmt_register_list(registers: Vec<u8>)->String{
    let list = registers.iter()
@@ -113,9 +116,9 @@ pub fn get_operands(code: &Opcode, hw: &HalfWord)-> Option<Operands>{
       Opcode::_16Bit(opcode) => {
          match opcode{
             B16::ADCS => Some(get_def_reg_pair_as_operands(hw)),
-            B16::ADD_Imm3 =>  Some(get_add_imm3_operands(hw)),
-            B16::ADD_Imm8 => Some(get_add_imm8_operands(hw)),
-            B16::ADDS_REG => Some(get_add_reg_t1_operands(hw)),
+            B16::ADD_Imm3 =>  Some(get_def_reg_pair_with_imm3(hw)),
+            B16::ADD_Imm8 => Some(get_dest_and_imm8(hw)),
+            B16::ADDS_REG => Some(get_9b_register_triplet(hw)),
             B16::ADDS_REG_T2 => Some(get_add_reg_t2_operands(hw)),
             B16::ADD_REG_SP_IMM8 => Some(get_add_reg_sp_imm8_operands(hw)),
             B16::INCR_SP_BY_IMM7 => Some(get_add_reg_sp_imm7_operands(hw)),
@@ -144,12 +147,12 @@ pub fn get_operands(code: &Opcode, hw: &HalfWord)-> Option<Operands>{
             B16::BREAKPOINT => Some(get_breakpoint_operands(hw)),
             B16::BR_LNK_EXCHANGE => Some(get_br_lnk_exchange_operands(hw)),
             B16::BR_EXCHANGE => Some(get_br_exchange_operands(hw)),
-            B16::CMP_NEG_REG => Some(get_cmp_neg_reg_operands(hw)),
+            B16::CMP_NEG_REG => Some(get_pure_reg_pair(hw)),
             B16::CMP_Imm8 => Some(get_cmp_imm8_operands(hw)),
-            B16::CMP_REG_T1 => Some(get_cmp_reg_t1_operands(hw)),
-            B16::CMP_REG_T2 => Some(get_cmp_reg_t2_operands(hw)),
+            B16::CMP_REG_T1 => Some(get_cmp_reg_operands::<3>(hw)),
+            B16::CMP_REG_T2 => Some(get_cmp_reg_operands::<4>(hw)),
             B16::XOR_REG => Some(get_def_reg_pair_as_operands(hw)),
-            B16::LDM => Some(get_ldm_operands(hw)),
+            B16::LDM => Some(get_load_list_operands(hw)),
             B16::LDR_Imm5 => Some(get_ldr_imm5_operands(hw)),
             B16::LDR_SP_Imm8 => Some(get_ldr_imm8_operands(hw)),
             B16::LDR_PC_Imm8 => Some(get_ldr_imm8_operands(hw)),
@@ -164,26 +167,62 @@ pub fn get_operands(code: &Opcode, hw: &HalfWord)-> Option<Operands>{
             B16::LSL_REGS => Some(get_def_reg_pair_as_operands(hw)),
             B16::LSR_Imm5 => Some(get_ls_imm5_operands(hw)),
             B16::LSR_REGS => Some(get_def_reg_pair_as_operands(hw)),
-            B16::MOV_Imm8 => Some(get_mov_imm8_operands(hw)),
+            B16::MOV_Imm8 => Some(get_dest_and_imm8(hw)),
             B16::MOV_REGS_T1 => Some(get_mov_reg_operands::<4>(hw)),
             B16::MOV_REGS_T2 => Some(get_mov_reg_operands::<3>(hw)),
             B16::MUL => Some(get_def_reg_pair_as_operands(hw)),
-            B16::MVN => Some(get_mvn_operands(hw)),
+            B16::MVN => Some(get_mov_reg_operands::<3>(hw)),
             B16::NOP => None,
             B16::POP => Some(get_pop_operands(hw)),
             B16::PUSH => Some(get_push_operands(hw)),
             B16::ORR => Some(get_def_reg_pair_as_operands(hw)),
+            B16::REV => Some(get_def_reg_pair_as_operands(hw)),
+            B16::REV_16 => Some(get_def_reg_pair_as_operands(hw)),
+            B16::REVSH => Some(get_def_reg_pair_as_operands(hw)),
+            B16::ROR => Some(get_def_reg_pair_as_operands(hw)),
+            B16::RSB => Some(get_def_reg_pair_as_operands(hw)),
+            B16::SBC => Some(get_def_reg_pair_as_operands(hw)),
+            B16::SEV => None,
+            B16::STM => Some(get_load_list_operands(hw)),
+            B16::STR_Imm5 => Some(get_str_imm5_operands(hw,2)),
+            B16::STR_Imm8 => Some(get_str_imm8_operands(hw,2)),
+            B16::STR_REG => Some(get_str_reg_operands(hw)),
+            B16::STRB_Imm5 => Some(get_str_imm5_operands(hw,0)),
+            B16::STRB_REG => Some(get_str_reg_operands(hw)),
+            B16::STRH_Imm5 => Some(get_str_imm5_operands(hw,1)),
+            B16::STRH_REG => Some(get_str_reg_operands(hw)),
+            B16::SUB_Imm3 => Some(get_def_reg_pair_with_imm3(hw)),
+            B16::SUB_Imm8 => Some(get_dest_and_imm8(hw)),
+            B16::SUB_REG => Some(get_9b_register_triplet(hw)),
+            B16::SUB_SP_Imm7 => Some(get_sub_sp_operands(hw)),
+            B16::SVC => Some(get_low_byte(hw)),
+            B16::SXTB => Some(get_def_reg_pair_as_operands(hw)),
+            B16::SXTH => Some(get_def_reg_pair_as_operands(hw)),
+            B16::TST => Some(get_pure_reg_pair(hw)),
+            B16::UNDEFINED => Some(get_low_byte(hw)),
+            B16::UXTB => Some(get_def_reg_pair_as_operands(hw)),
+            B16::UXTH => Some(get_def_reg_pair_as_operands(hw)),
+            B16::WFE => None,
+            B16::WFI => None,
+            B16::YIELD => None,
             _  =>  panic!("{:?} has not been implemented",code)
-
          }
       }
       Opcode::_32Bit(_) => panic!("cannot parse 16b operands from 32b instruction {:?}",code)
    }
 }
 
-pub fn get_operands_32b(code: &Opcode, bytes: &Word)->Option<Opcode>{
+pub fn get_operands_32b(code: &Opcode, bytes: &Word)->Option<Operands>{
    match code {
-      _ => panic!("{:?} has not been implemented",code)
+      Opcode::_16Bit(_) => {
+         panic!("16b {:?} operands shouldn't be parsed from 32b input",code)
+      },
+      Opcode::_32Bit(instruction) => {
+         match instruction{
+            B32::BR_AND_LNK => Some(get_branch_and_lnk_operands(bytes)),
+            _ => todo!()
+         }
+      }
    }
 }
 
@@ -197,9 +236,9 @@ fn get_def_reg_pair_as_operands(hw: &HalfWord)->Operands{
    Operands::RegisterPair(dest, other)
 }
 
-fn get_pure_reg_pair(hw: &HalfWord)->(Register,Register){
+fn get_pure_reg_pair(hw: &HalfWord)->Operands{
    let (dest,other) = get_def_reg_pair_u8(hw);
-   (dest.into(),other.into())
+   Operands::PureRegisterPair(dest.into(),other.into())
 }
 
 #[inline]
@@ -209,29 +248,30 @@ fn get_def_reg_pair_u8(hw: &HalfWord)->(u8,u8){
    (dest,other)
 }
 
-fn get_add_imm3_operands(hw: &HalfWord)->Operands{
+#[inline]
+fn get_def_reg_pair_with_imm3(hw: &HalfWord)->Operands{
    let (dest,other) = get_def_reg_pair(hw);
    let native: u16 = from_arm_bytes_16b(*hw);
    let imm3: Literal<3> = get_bitfield::<3>(native as u32, 6);
-   Operands::ADD_Imm3(dest,other.0.into(),imm3)
+   Operands::RegPairImm3(dest,other.0.into(),imm3)
 }
 
-fn get_add_imm8_operands(hw: &HalfWord)->Operands{
+fn get_dest_and_imm8(hw: &HalfWord)->Operands{
    let dest: u8 = hw[1] & 0x07;
    let imm8: Literal<8> = (hw[0] as u32).into();
-   Operands::ADD_Imm8(dest.into(),imm8)
+   Operands::DestImm8(dest.into(), imm8)
 }
 
-fn get_9b_register_triplet(hw: &HalfWord)->(DestRegister,SrcRegister,Register){
-   let dest: DestRegister = (hw[0] & 0x07).into();
-   let src: SrcRegister = ((hw[0] & 0x38) >> 3).into();
-   let native: u16 = from_arm_bytes_16b(*hw);
-   let second_arg: Register = (((native & 0x01C0) >> 6) as u8).into();
+fn get_9b_register_triplet_u8(hw: &HalfWord)->(u8,u8,u8){
+   let dest = (hw[0] & 0x07).into();
+   let src = (hw[0] & 0x38) >> 3;
+   let native = from_arm_bytes_16b(*hw);
+   let second_arg = ((native & 0x01C0) >> 6) as u8;
    (dest,src,second_arg)
 }
-fn get_add_reg_t1_operands(hw: &HalfWord)->Operands{
-   let (dest,arg_0,arg_1) = get_9b_register_triplet(hw);
-   Operands::RegisterTriplet(dest,arg_0,arg_1)
+fn get_9b_register_triplet(hw: &HalfWord)->Operands{
+   let (dest,src,second_arg) = get_9b_register_triplet_u8(hw);
+   Operands::RegisterTriplet(dest.into(),src.into(),second_arg.into())
 }
 
 fn get_add_reg_t2_operands(hw: &HalfWord)->Operands{
@@ -289,7 +329,7 @@ fn get_breakpoint_operands(hw: &HalfWord)->Operands{
    Operands::BREAKPOINT(imm8)
 }
 
-fn get_branch_and_lnk_operands(bytes: &Word)->i32{
+fn get_branch_and_lnk_operands(bytes: &Word)->Operands{
    let left_hw: [u8;2] = [bytes[0],bytes[1]];
    let native_l: u16 = from_arm_bytes_16b(left_hw);
 
@@ -311,7 +351,11 @@ fn get_branch_and_lnk_operands(bytes: &Word)->i32{
       u_total
    };
 
-   sign_extended as i32
+   let typed_sign_extended = sign_extended as i32;
+   debug_assert_eq!(typed_sign_extended % 2,0);
+   debug_assert!(typed_sign_extended >= -16777216," within limit specified in ARMv6 ISA");
+   debug_assert!(typed_sign_extended <= 16777214," within limit specified in ARMv6 ISA");
+   Operands::BR_LNK(sign_extended as i32)
 }
 
 fn get_br_lnk_exchange_operands(hw: &HalfWord)->Operands{
@@ -324,48 +368,46 @@ fn get_br_exchange_operands(hw: &HalfWord)->Operands{
    Operands::BR_EXCHANGE(register)
 }
 
-fn get_cmp_neg_reg_operands(hw: &HalfWord)->Operands{
-   let (dest,other) = get_pure_reg_pair(hw);
-   Operands::PureRegisterPair(dest,other)
-}
-
 fn get_cmp_imm8_operands(hw: &HalfWord)->Operands{
-   let imm8: Literal<8> =  (hw[0]).into();
-   let register: Register = (hw[1] & 0x07).into();
-   Operands::CMP_Imm8(register,imm8)
+   let (register,imm8) = offset_addressing_imm8(hw);
+   Operands::CMP_Imm8(register.into(),imm8)
 }
 
-fn get_cmp_reg_t1_operands(hw: &HalfWord)->Operands{
+fn get_cmp_reg_operands<const L:  u32>(hw: &HalfWord)->Operands{
    let first: Register = (hw[0] & 0x07).into();
-   let second: Register = get_bitfield::<3>(hw[0] as u32,3).0.into();
+   let second: Register = get_bitfield::<L>(hw[0] as u32,3).0.into();
    Operands::PureRegisterPair(first, second)
 }
 
-fn get_cmp_reg_t2_operands(hw: &HalfWord)->Operands{
-   let first: Register = (hw[0] & 0x07).into();
-   let second: Register = get_bitfield::<4>(hw[0] as u32,3).0.into();
-   Operands::PureRegisterPair(first, second)
-}
-
-fn get_ldm_operands(hw: &HalfWord)->Operands{
+fn get_load_list_operands(hw: &HalfWord)->Operands{
    let list = hw[0] as u16; 
    let reg: Register = (hw[1] & 0x07).into();
-   Operands::LDM(reg, list)
+   Operands::LoadableList(reg, list)
+}
+
+fn offset_addressing_imm5(hw: &HalfWord)->(u8,u8,Literal<5>){
+   let (dest,base) = get_def_reg_pair_u8(hw);
+   let native = from_arm_bytes_16b(*hw);
+   let imm5: Literal<5> = get_bitfield::<5>(native as u32,6);
+   (dest,base.into(),imm5)
+}
+
+fn offset_addressing_imm8(hw: &HalfWord)->(u8,Literal<8>){
+   let dest = (hw[1] & 0x07).into();
+   let imm8: Literal<8> = hw[0].into();
+   (dest,imm8)
+}
+
+fn offset_addressing_regs(hw: &HalfWord)->(u8,Register,Register){
+   let (flex,base,offset) = get_9b_register_triplet_u8(hw);
+   (flex,base.into(),offset.into())
 }
 
 fn get_dest_src_and_imm5(hw: &HalfWord)->(DestRegister,SrcRegister,Literal<5>){
-   let dest: DestRegister = (hw[0] & 0x07).into();
-   let native = from_arm_bytes_16b(*hw);
-   let base: SrcRegister = get_bitfield::<3>(native as u32,3).0.into();
-   let imm5: Literal<5> = get_bitfield::<5>(native as u32,6);
-   (dest,base,imm5)
+   let (dest,base,imm5) = offset_addressing_imm5(hw);
+   (dest.into(),base.into(),imm5)
 }
 
-fn get_8b_literal_and_dest(hw: &HalfWord)->(Literal<8>,DestRegister){
-   let dest: DestRegister = (hw[1] & 0x07).into();
-   let imm8: Literal<8> = hw[0].into();
-   (imm8,dest)
-}
 
 fn get_ldr_imm5_operands(hw: &HalfWord)->Operands{
    let (dest,base,imm5) = get_dest_src_and_imm5(hw);
@@ -373,13 +415,13 @@ fn get_ldr_imm5_operands(hw: &HalfWord)->Operands{
 }
 
 fn get_ldr_imm8_operands(hw: &HalfWord)->Operands{
-   let (imm8,dest) = get_8b_literal_and_dest(hw);
-   Operands::LDR_Imm8(dest, imm8)
+   let (dest,imm8) = offset_addressing_imm8(hw);
+   Operands::LDR_Imm8(dest.into(), imm8)
 }
 
 fn get_ldr_reg_operands(hw: &HalfWord)->Operands{
-   let (dest,base_reg,offset_reg) = get_9b_register_triplet(hw);
-   Operands::LDR_REG(dest,base_reg,offset_reg)
+   let (dest,base_reg,offset_reg) = offset_addressing_regs(hw);
+   Operands::LDR_REG(dest.into(),base_reg.0.into(),offset_reg)
 }
 
 fn get_ls_imm5_operands(hw: &HalfWord)->Operands{
@@ -387,20 +429,17 @@ fn get_ls_imm5_operands(hw: &HalfWord)->Operands{
    Operands::LS_Imm5(dest,src,offset)
 }
 
-fn get_mov_imm8_operands(hw: &HalfWord)->Operands{
-   let (literal,dest) = get_8b_literal_and_dest(hw);
-   Operands::MOV_Imm8(dest,literal)
-}
-
 fn get_mov_reg_operands<const L: u32>(hw: &HalfWord)->Operands{
-   let dest: DestRegister = (hw[0] & 0x07).into();
+   let dest: DestRegister = if L == 4{
+      //println!("using extra byte");
+      let d = ((hw[0] & 0x80) >> 4) | (hw[0] & 0x07);
+      d.into()
+   }else{
+      (hw[0] & 0x07).into()
+   };
+   
    let src: SrcRegister = get_bitfield::<L>(hw[0] as u32,3).0.into();
    Operands::MOV_REG(dest,src)
-}
-
-fn get_mvn_operands(hw: &HalfWord)->Operands{
-   let (dest,src) = get_def_reg_pair(hw);
-   Operands::MVN(dest, src.0.into())
 }
 
 fn get_pop_operands(hw: &HalfWord)->Operands{
@@ -410,7 +449,36 @@ fn get_pop_operands(hw: &HalfWord)->Operands{
 }
 
 fn get_push_operands(hw: &HalfWord)->Operands{
-   let lr_bit = (hw[0] & 0x01) as u16;
+   let lr_bit = (hw[1] & 0x01) as u16;
    let list = hw[0] as u16 | (lr_bit << 14);
    Operands::RegisterList(list)
+}
+
+fn get_str_imm5_operands(hw: &HalfWord,shift: u8)->Operands{
+   let (dest,base,imm5) = offset_addressing_imm5(hw);
+   let adjusted: Literal<5> = (imm5.0 << shift).into(); 
+   let src: SrcRegister = dest.into();
+   let base_reg: Register = base.into();
+   Operands::STR_Imm5(src,base_reg,adjusted)
+}
+
+fn get_str_imm8_operands(hw: &HalfWord, shift: u8)-> Operands{
+   let (src,offset) = offset_addressing_imm8(hw);
+   let adjusted: Literal<8> = (offset.0 << shift).into();
+   Operands::STR_Imm8(src.into(), adjusted)
+}
+
+fn get_str_reg_operands(hw: &HalfWord)-> Operands{
+   let (src,base,offset) = offset_addressing_regs(hw);
+   Operands::STR_REG(src.into(),base,offset)
+}
+
+fn get_sub_sp_operands(hw: &HalfWord)->Operands{
+   let literal: Literal<7> = (((hw[0] & 0x7F) as u32) << 2).into();
+   debug_assert!(literal.0 <=508);
+   Operands::SP_SUB(literal)
+}
+
+fn get_low_byte(hw: &HalfWord)->Operands{
+   Operands::Byte(hw[0].into())
 }
