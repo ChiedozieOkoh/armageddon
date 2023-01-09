@@ -114,316 +114,55 @@ pub enum Opcode{
 
 impl From<&HalfWord> for Opcode{
    fn from(a: &HalfWord)->Self{
-      if adcs_mask(&a){
-         return Opcode::_16Bit(B16::ADCS);
-      }
-
-      if addi_mask(&a){
-         return Opcode::_16Bit(B16::ADD_Imm3);
-      }
-
-      if addi8_mask(&a){
-         return Opcode::_16Bit(B16::ADD_Imm8);
-      }
-
-      if adds_3reg_mask(&a){
-         return Opcode::_16Bit(B16::ADDS_REG);
-      }
-
-      if incr_reg_by_sp(&a){
-         return Opcode::_16Bit(B16::INCR_REG_BY_SP);
-      }
-
-      if incr_sp_by_reg_mask(&a){
-         return Opcode::_16Bit(B16::INCR_SP_BY_REG);
-      }
-
-      if adds_2reg_mask(&a){
-         return Opcode::_16Bit(B16::ADDS_REG_T2);
-      }
-
-      if add_sp_with_immediate_and_store_in_reg_mask(&a){
-         return Opcode::_16Bit(B16::ADD_REG_SP_IMM8);
-      }
-
-      if incr_sp_by_imm7_mask(&a){
-         return Opcode::_16Bit(B16::INCR_SP_BY_IMM7);
-      }
-
-      if adr_mask(&a){
-         return Opcode::_16Bit(B16::ADR);
-      }
-
-      if ands_mask(&a){
-         return Opcode::_16Bit(B16::ANDS);
-      }
-
-      if asr_imm5_mask(&a){
-         return Opcode::_16Bit(B16::ASRS_Imm5);
-      }
-
-      if asrs_reg_mask(&a){
-         return Opcode::_16Bit(B16::ASRS_REG);
-      }
-
-      if ukwn_branch_mask(&a){
-         return Opcode::_16Bit(B16::UNDEFINED);
-      }
-
-      if svc_mask(&a){
-         return Opcode::_16Bit(B16::SVC);
-      }
-
-      let maybe_branch = try_get_branch(&a);
-      if maybe_branch.is_some(){
-         return maybe_branch.unwrap();
-      }
-
-      if bics_mask(&a){
-         return Opcode::_16Bit(B16::BIT_CLEAR_REGISTER)
-      }
-
-      if bkpt_mask(&a){
-         return Opcode::_16Bit(B16::BREAKPOINT);
-      }
-
-      if blx_mask(&a){
-         return Opcode::_16Bit(B16::BR_LNK_EXCHANGE);
-      }
-
-      if bx_mask(&a){
-         return Opcode::_16Bit(B16::BR_EXCHANGE);
-      }
-
-      if cmn_mask(&a){
-         return Opcode::_16Bit(B16::CMP_NEG_REG);
-      }
-
-      if cmp_mask(&a){
-         return Opcode::_16Bit(B16::CMP_Imm8);
-      }
-
-      if cmp_reg_t1_mask(&a){
-         return Opcode::_16Bit(B16::CMP_REG_T1);
-      }
-
-      if cmp_reg_t2_mask(&a){
-         return Opcode::_16Bit(B16::CMP_REG_T2);
-      }
-
-      if cps_mask(&a){
-         return Opcode::_16Bit(B16::CPS);
-      }
-
-      if xor_reg_mask(&a){
-         return Opcode::_16Bit(B16::XOR_REG);
-      }
-
-      if ldm_mask(&a){
-         return Opcode::_16Bit(B16::LDM);
-      }
-
-      if ldr_imm5_mask(&a){
-         return Opcode::_16Bit(B16::LDR_Imm5);
-      }
-
-      if ldr_imm8_mask(&a){
-         return Opcode::_16Bit(B16::LDR_SP_Imm8);
-      }
-
-      if ldr_pc_imm8_mask(&a){
-         return Opcode::_16Bit(B16::LDR_PC_Imm8);
-      }
-
-      if ldr_reg_mask(&a){
-         return Opcode::_16Bit(B16::LDR_REGS);
-      }
-
-      if ldrb_imm5_mask(&a){
-         return Opcode::_16Bit(B16::LDRB_Imm5);
-      }
-
-      if ldrb_reg_mask(&a){
-         return Opcode::_16Bit(B16::LDRB_REGS);
-      }
-
-      if ldrh_imm5_mask(&a){
-         return Opcode::_16Bit(B16::LDRH_Imm5);
-      }
-
-      if ldrh_reg_mask(&a){
-         return Opcode::_16Bit(B16::LDRH_REGS);
-      }
-
-      if ldrsb_reg_mask(&a){
-         return Opcode::_16Bit(B16::LDRSB_REGS);
-      }
-
-      if ldrsh_reg_mask(&a){
-         return Opcode::_16Bit(B16::LDRSH_REGS);
-      }
-
-      if lsl_imm5_mask(&a){
-         return Opcode::_16Bit(B16::LSL_Imm5);
-      }
-
-      if lsl_reg_mask(&a){
-         return Opcode::_16Bit(B16::LSL_REGS);
-      }
-
-      if lsr_imm5_mask(&a){
-         return Opcode::_16Bit(B16::LSR_Imm5);
-      }
-
-      if lsr_reg_mask(&a){
-         return Opcode::_16Bit(B16::LSR_REGS);
-      }
-      
-      if mov_imm8_mask(&a){
-         return Opcode::_16Bit(B16::MOV_Imm8);
-      }
-
-      if mov_regs_t1_mask(&a){
-         return Opcode::_16Bit(B16::MOV_REGS_T1);
-      }
-
-      if mov_regs_t2_mask(&a){
-         return Opcode::_16Bit(B16::MOV_REGS_T2);
-      }
-
-      if mul_mask(&a){
-         return Opcode::_16Bit(B16::MUL);
-      }
-
-      if mvn_mask(&a){
-         return Opcode::_16Bit(B16::MVN);
-      }
-
-      if nop_mask(&a){
-         return Opcode::_16Bit(B16::NOP);
-      }
-
-      if orr_mask(&a){
-         return Opcode::_16Bit(B16::ORR);
-      }
-
-      if pop_mask(&a){
-         return Opcode::_16Bit(B16::POP);
-      }
-
-      if push_mask(&a){
-         return Opcode::_16Bit(B16::PUSH);
-      }
-
-      if rev_mask(&a){
-         return Opcode::_16Bit(B16::REV);
-      }
-
-      if rev16_mask(&a){
-         return Opcode::_16Bit(B16::REV_16);
-      }
-
-      if revsh_mask(&a){
-         return Opcode::_16Bit(B16::REVSH);
-      }
-
-      if ror_mask(&a){
-         return Opcode::_16Bit(B16::ROR);
-      }
-
-      if rsb_mask(&a){
-         return Opcode::_16Bit(B16::RSB);
-      }
-
-      if sbc_mask(&a){
-         return Opcode::_16Bit(B16::SBC);
-      }
-
-      if sev_mask(&a){
-         return Opcode::_16Bit(B16::SEV);
-      }
-
-      if stm_mask(&a){
-         return Opcode::_16Bit(B16::STM);
-      }
-
-      if str_imm5_mask(&a){
-         return Opcode::_16Bit(B16::STR_Imm5);
-      }
-
-      if str_imm8_mask(&a){
-         return Opcode::_16Bit(B16::STR_Imm8);
-      }
-
-      if str_reg_mask(&a){
-         return Opcode::_16Bit(B16::STR_REG);
-      }
-
-      if strb_imm5_mask(&a){
-         return Opcode::_16Bit(B16::STRB_Imm5);
-      }
-
-      if strb_reg_mask(&a){
-         return Opcode::_16Bit(B16::STRB_REG);
-      }
-
-      if strh_imm5_mask(&a){
-         return Opcode::_16Bit(B16::STRH_Imm5);
-      }
-
-      if strh_reg_mask(&a){
-         return Opcode::_16Bit(B16::STRH_REG);
-      }
-
-      if sub_imm3_mask(&a){
-         return Opcode::_16Bit(B16::SUB_Imm3);
-      }
-
-      if sub_imm8_mask(&a){
-         return Opcode::_16Bit(B16::SUB_Imm8);
-      }
-
-      if sub_reg_mask(&a){
-         return Opcode::_16Bit(B16::SUB_REG);
-      }
-
-      if sub_sp_imm7_mask(&a){
-         return Opcode::_16Bit(B16::SUB_SP_Imm7);
-      }
-
-      if sxtb_mask(&a){
-         return Opcode::_16Bit(B16::SXTB);
-      }
-
-      if sxth_mask(&a){
-         return Opcode::_16Bit(B16::SXTH);
-      }
-
-      if tst_mask(&a){
-         return Opcode::_16Bit(B16::TST);
-      }
-
-      if uxtb_mask(&a){
-         return Opcode::_16Bit(B16::UXTB);
-      }
-
-      if uxth_mask(&a){
-         return Opcode::_16Bit(B16::UXTH);
-      }
-
-      if wfe_mask(&a){
-         return Opcode::_16Bit(B16::WFE);
-      }
-
-      if wfi_mask(&a){
-         return Opcode::_16Bit(B16::WFI);
-      }
-
-      if yield_mask(&a){
-         return Opcode::_16Bit(B16::YIELD);
-      }
-
       Opcode::_16Bit(B16::UNDEFINED)
+//      let code = match a{
+//         [0x00,0xBF] => Some(Opcode::_16Bit(B16::NOP)),
+//         [0x40,0xBF] => Some(Opcode::_16Bit(B16::SEV)),
+//         [0x20,0xBF] => Some(Opcode::_16Bit(B16::WFE)),
+//         [0x30,0xBF] => Some(Opcode::_16Bit(B16::WFI)),
+//         [0x10,0xBF] => Some(Opcode::_16Bit(B16::YIELD)),
+//         _ => None
+//      };
+//
+//      let opcode_hint_6b = hw[1] & 0xFC;
+//      match opcode_hint_6b{
+//         0x40 => data_proccess(),
+//         0x44 => special_data(),
+//         _ => None
+//      }
+//
+//      let opcode_hint_5b = hw[1] & 0xF8;
+//      match opcode_hint_5b{
+//         0x48 => load_pool(),
+//         0xA0 => pc_relative(),
+//         0xA8 => sp_relative(),
+//         0xC0 => store_multiple(),
+//         0xC8 => load_multiple(),
+//         0xE0 => Some(Opcode::_16Bit(B16::B_ALWAYS)),
+//         _ => None
+//      }
+//
+//      let opcode_hiht_4b = hw[1] & 0xF0;
+//      match opcode_hiht_4b{
+//         0x50 => load_store_single(),
+//         0xB0 => misc(),
+//         0xD0 => cond_branch(),
+//         _ => None
+//      }
+//
+//      let opcode_hint_3b = hw[1] & 0xE0;
+//      match opcode_hint_3b{
+//         0x60 => load_store_single(),
+//         0x80 => load_store_single(),
+//         _ => None
+//      }
+//
+//      if hw[1] & 0xC0 == 0{
+//         shift_add_sub_mv_cmpr()
+//      }else{
+//         None
+//      }
+//      code.unwrap()
    }
 }
 
