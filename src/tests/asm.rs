@@ -597,6 +597,29 @@ fn should_recognise_cmn()->Result<(),std::io::Error>{
 }
 
 #[test]
+fn should_recognise_cps()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/cps.s");
+   let bytes = assemble(path,b".text\n.thumb\nCPSIE i\nCPSID i").unwrap();
+   let enable: Opcode = (&[bytes[0],bytes[1]]).into();
+   let disable: Opcode = (&[bytes[2],bytes[3]]).into();
+
+   if let Some(Operands::EnableInterupt(flag)) = get_operands(&Opcode::_16Bit(B16::CPS), &[bytes[0],bytes[1]]){
+      assert_eq!(flag,true);
+   }else{
+      panic!("could not parse CPS");
+   }
+
+   if let Some(Operands::EnableInterupt(flag)) = get_operands(&Opcode::_16Bit(B16::CPS), &[bytes[2],bytes[3]]){
+      assert_eq!(flag,false);
+   }else{
+      panic!("could not parse CPS");
+   }
+   assert_eq!(Opcode::_16Bit(B16::CPS),enable);
+   assert_eq!(Opcode::_16Bit(B16::CPS),disable);
+   Ok(())
+}
+
+#[test]
 fn should_recognise_cmp()->Result<(),std::io::Error>{
    let cmp_path = Path::new("assembly_tests/cmp.s");
    let src_code = concat!(
@@ -604,7 +627,6 @@ fn should_recognise_cmp()->Result<(),std::io::Error>{
       "CMP r3,r6\n",
       "CMP r2,r9\n"
    );
-
 
    let bytes = assemble(
       cmp_path,

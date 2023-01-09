@@ -47,6 +47,7 @@ pub enum Operands{
    STR_REG(SrcRegister,Register,Register),
    SP_SUB(Literal<7>),
    Byte(Literal<8>),
+   EnableInterupt(bool)
 }
 
 pub fn pretty_print(operands: &Operands)->String{
@@ -75,6 +76,7 @@ pub fn pretty_print(operands: &Operands)->String{
          let registers = get_set_bits(*list);
          fmt_register_list(registers)
       },
+      Operands::EnableInterupt(_) => String::from("i"),
       _ => {
          //println!("tt--{:?}",operands);
          let dbg_operands = format!("{:?}",operands);
@@ -151,6 +153,7 @@ pub fn get_operands(code: &Opcode, hw: &HalfWord)-> Option<Operands>{
             B16::CMP_Imm8 => Some(get_cmp_imm8_operands(hw)),
             B16::CMP_REG_T1 => Some(get_cmp_reg_operands::<3>(hw)),
             B16::CMP_REG_T2 => Some(get_cmp_reg_operands::<4>(hw)),
+            B16::CPS => Some(get_cps_operands(hw)),
             B16::XOR_REG => Some(get_def_reg_pair_as_operands(hw)),
             B16::LDM => Some(get_load_list_operands(hw)),
             B16::LDR_Imm5 => Some(get_ldr_imm5_operands(hw)),
@@ -205,7 +208,6 @@ pub fn get_operands(code: &Opcode, hw: &HalfWord)-> Option<Operands>{
             B16::WFE => None,
             B16::WFI => None,
             B16::YIELD => None,
-            _  =>  panic!("{:?} has not been implemented",code)
          }
       }
       Opcode::_32Bit(_) => panic!("cannot parse 16b operands from 32b instruction {:?}",code)
@@ -481,4 +483,9 @@ fn get_sub_sp_operands(hw: &HalfWord)->Operands{
 
 fn get_low_byte(hw: &HalfWord)->Operands{
    Operands::Byte(hw[0].into())
+}
+
+fn get_cps_operands(hw: &HalfWord)->Operands{
+   let flat = (hw[0] & 0x10) == 0;
+   Operands::EnableInterupt(flat)
 }

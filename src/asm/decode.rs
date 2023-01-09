@@ -211,6 +211,10 @@ impl From<&HalfWord> for Opcode{
          return Opcode::_16Bit(B16::CMP_REG_T2);
       }
 
+      if cps_mask(&a){
+         return Opcode::_16Bit(B16::CPS);
+      }
+
       if xor_reg_mask(&a){
          return Opcode::_16Bit(B16::XOR_REG);
       }
@@ -568,6 +572,11 @@ const fn cmp_reg_t1_mask(hw: &HalfWord)->bool{
 #[inline]
 const fn cmp_reg_t2_mask(hw: &HalfWord)->bool{
    hw[1] == 0x45 
+}
+
+#[inline]
+const fn cps_mask(hw: &HalfWord)->bool{
+   hw[1] == 0xB6 && ((hw[0] & 0x60) == 0x60)
 }
 
 #[inline]
