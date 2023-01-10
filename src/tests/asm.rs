@@ -1298,6 +1298,7 @@ fn should_recognise_strh()->Result<(),std::io::Error>{
    
    let bytes = assemble(path, b".text\n.thumb\nstrh r4, [r3,#62]\n").unwrap();
    let im: Opcode = (&[bytes[0],bytes[1]]).into();
+   println!("is {:?}",im);
    if let Some(Operands::STR_Imm5(src,base,literal)) = get_operands(&Opcode::_16Bit(B16::STRH_Imm5), &[bytes[0],bytes[1]]){
       assert_eq!((src.0,base.0,literal.0),(4,3,62));
    }else{

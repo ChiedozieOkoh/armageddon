@@ -305,7 +305,8 @@ fn get_incr_sp_by_reg_operands(hw: &HalfWord)->Operands{
 
 fn get_adr_operands(hw: &HalfWord)->Operands{
    let dest: u8 = hw[1] & 0x07;
-   Operands::ADR(dest.into(),(hw[0] as u32).into())
+   let literal = (hw[0] as u32) << 2;
+   Operands::ADR(dest.into(),(literal).into())
 }
 
 fn get_asr_imm5_operands(hw: &HalfWord)->Operands{
