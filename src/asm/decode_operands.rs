@@ -19,7 +19,6 @@ use crate::binutils::{from_arm_bytes_16b, get_bitfield, BitList};
 pub enum Operands{
    ADD_REG_SP_IMM8(DestRegister,Literal<8>),
    INCR_SP_BY_IMM7(Literal<7>),
-   INCR_REG_BY_SP(Register),
    INCR_SP_BY_REG(Register),
    ADR(DestRegister,Literal<8>),
    ASRS_Imm5(DestRegister,SrcRegister,Literal<5>),
@@ -124,7 +123,6 @@ pub fn get_operands(code: &Opcode, hw: &HalfWord)-> Option<Operands>{
             B16::ADDS_REG_T2 => Some(get_add_reg_t2_operands(hw)),
             B16::ADD_REG_SP_IMM8 => Some(get_add_reg_sp_imm8_operands(hw)),
             B16::INCR_SP_BY_IMM7 => Some(get_add_reg_sp_imm7_operands(hw)),
-            B16::INCR_REG_BY_SP => Some(get_incr_reg_by_sp_operands(hw)),
             B16::INCR_SP_BY_REG => Some(get_incr_sp_by_reg_operands(hw)),
             B16::ADR => Some(get_adr_operands(hw)),
             B16::ANDS => Some(get_def_reg_pair_as_operands(hw)),
@@ -293,10 +291,6 @@ fn get_add_reg_sp_imm7_operands(hw: &HalfWord)->Operands{
    Operands::INCR_SP_BY_IMM7((v as u32).into())
 }
 
-fn get_incr_reg_by_sp_operands(hw: &HalfWord)->Operands{
-   let dest = hw[0] & 0x07;
-   Operands::INCR_REG_BY_SP(dest.into())
-}
 
 fn get_incr_sp_by_reg_operands(hw: &HalfWord)->Operands{
    let dest = get_bitfield::<4>(hw[0] as u32,3);

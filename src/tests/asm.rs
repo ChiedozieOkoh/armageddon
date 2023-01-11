@@ -254,7 +254,7 @@ pub fn should_recognise_add_sp_and_immediate() -> Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/add_sp_imm.s");
    write_asm(
       path,
-      b".text\n.thumb\nADD r7,SP,#64\nADD SP,SP,#128\nADD r0,SP,r0\nADD SP,r6\n"
+      b".text\n.thumb\nADD r7,SP,#64\nADD SP,SP,#128\nADD r3,SP,r3\nADD SP,r6\n"
    )?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
@@ -280,26 +280,26 @@ pub fn should_recognise_add_sp_and_immediate() -> Result<(),std::io::Error>{
    }
 
    let third: Opcode = (&third_instr).into();
-   if let Some(Operands::INCR_REG_BY_SP(reg)) = get_operands(&Opcode::_16Bit(B16::INCR_REG_BY_SP),&third_instr){
-      assert_eq!(reg.0,0);
+   if let Some(Operands::RegisterPair(a,b)) = get_operands(&Opcode::_16Bit(B16::ADDS_REG_T2),&third_instr){
+      assert_eq!((a.0,b.0),(3,13));
    }else{
-      panic!("could not decode incr reg by sp operands");
+      panic!("could not decode add ");
    }
 
    let fourth: Opcode = (&fourth_instr).into();
 
-   if let Some(Operands::INCR_SP_BY_REG(reg_1)) = get_operands(&Opcode::_16Bit(B16::INCR_SP_BY_REG), &fourth_instr){
-      assert_eq!(reg_1.0,6);
+   if let Some(Operands::INCR_SP_BY_REG(reg)) = get_operands(&Opcode::_16Bit(B16::INCR_SP_BY_REG), &fourth_instr){
+      assert_eq!(reg.0,6);
    }else{
-      panic!("could notdecode incr sp by reg operands");
+      panic!("could not decode add");
    }
 
    std::fs::remove_file(path)?;
    std::fs::remove_file(elf)?;
    assert_eq!(Opcode::_16Bit(B16::ADD_REG_SP_IMM8),first);
    assert_eq!(Opcode::_16Bit(B16::INCR_SP_BY_IMM7),second);
-   assert_eq!(Opcode::_16Bit(B16::INCR_REG_BY_SP),third);
-   assert_eq!(Opcode::_16Bit(B16::INCR_SP_BY_REG),fourth);
+   assert_eq!(Opcode::_16Bit(B16::ADDS_REG_T2),third);
+   assert_eq!(Opcode::_16Bit(B16::ADDS_REG_T2),fourth);
    Ok(())
 }
 
