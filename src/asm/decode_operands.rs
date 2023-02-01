@@ -322,19 +322,19 @@ fn get_cond_branch_operands(hw: &HalfWord)->Operands{
    }else {
       println!("is unsigned");
    }
-   let extended = sign_extend(shifted);
+   let extended = sign_extend(shifted) + 4;
    println!("ext: {}",extended);
    debug_assert!(extended >= -256);
    debug_assert!(extended <= 254);
    debug_assert_eq!(extended.abs() % 2,0);
-   Operands::COND_BRANCH(extended + 4)
+   Operands::COND_BRANCH(extended)
 }
 
 fn get_uncond_branch_operands(hw: &HalfWord)->Operands{
    let native: u16 = from_arm_bytes_16b(*hw);
    let label: Literal<11> = ((native & 0x07FF) as u32).into();
    let adjusted: Literal<12> = (label.0 << 1).into();
-   let literal: i32 = sign_extend(adjusted);
+   let literal: i32 = sign_extend(adjusted) + 4;
    debug_assert!(literal >= -2048);
    debug_assert!(literal <= 2046);
    debug_assert_eq!(literal.abs() % 2,0);

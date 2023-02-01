@@ -558,13 +558,28 @@ fn should_calculate_labels_correctly()->Result<(),std::io::Error>{
       panic!("could not decode branch");
    }
    assert_eq!(opcode,Opcode::_16Bit(B16::BEQ));
+
+   let src_code = concat!(
+      ".text\n",
+      ".thumb\n",
+      ".syntax unified\n",
+      "BAL.N .-200\n",
+   );
+   let bytes = assemble(path,src_code.as_bytes()).unwrap();
+   let opcode: Opcode = (&[bytes[0],bytes[1]]).into();
+   assert_eq!(opcode,Opcode::_16Bit(B16::B_ALWAYS));
+   if let Some(Operands::B_ALWAYS(literal)) = get_operands(&Opcode::_16Bit(B16::B_ALWAYS), &[bytes[0],bytes[1]]){
+      assert_eq!(literal,-200);
+   }else{
+      panic!("could not decode branch");
+   }
    Ok(())
 }
 
 //#[test]
 fn should_recognise_bl()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/bl.s");
-   write_asm(path,b".text\n.thumb\n_some_where:\nBL _some_where\n\n")?;
+   write_asm(path,b".text\n.thumb\n.syntax unified\nBL.W .-20\n\n")?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
    let first_instr: [u8;4] = [opcodes[0],opcodes[1],opcodes[2],opcodes[3]];
@@ -573,7 +588,6 @@ fn should_recognise_bl()->Result<(),std::io::Error>{
 
    if let Some(Operands::BR_LNK(literal)) = get_operands_32b(&Opcode::_32Bit(B32::BR_AND_LNK), &first_instr){
       assert_eq!(4,literal);
-      //TODO read system architecture to 
    }else{
       panic!("could not detect literal");
    }
