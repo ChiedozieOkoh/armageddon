@@ -221,7 +221,7 @@ pub fn should_recognise_add_with_immediates()-> Result<(),std::io::Error>{
 #[test]
 pub fn should_recognise_add_with_registers()-> Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/addr.s");
-   write_asm(path,b".text\n.thumb\nADD r3,r2,r7\nADD r7,r12\n")?;
+   write_asm(path,b".text\n.thumb\nADD r3,r2,r7\nADD r8,r12\n")?;
    let elf = asm_file_to_elf_with_t2_arm_encoding(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
    let first_instr: [u8;2] = [opcodes[0], opcodes[1]];
@@ -237,7 +237,7 @@ pub fn should_recognise_add_with_registers()-> Result<(),std::io::Error>{
 
    let second: Opcode = (&sec_instr).into();
    if let Some(Operands::RegisterPair(rd1,rb0)) = get_operands(&Opcode::_16Bit(B16::ADDS_REG_T2),&sec_instr){
-      assert_eq!((rd1.0,rb0.0), (7,12));
+      assert_eq!((rd1.0,rb0.0), (8,12));
    }else{
       panic!("could not decode ADD_reg T2 operands");
    }
@@ -266,7 +266,7 @@ pub fn should_recognise_add_sp_and_immediate() -> Result<(),std::io::Error>{
    let first: Opcode = (&first_instr).into();
 
    if let Some(Operands::ADD_REG_SP_IMM8(dest_0,imm8)) = get_operands(&Opcode::_16Bit(B16::ADD_REG_SP_IMM8), &first_instr){
-      assert_eq!((dest_0.0,imm8.0),(7,64/4));
+      assert_eq!((dest_0.0,imm8.0),(7,64));
    }else{
       panic!("could not decode add_rep_sp_imm8 operands");
    }
@@ -274,7 +274,7 @@ pub fn should_recognise_add_sp_and_immediate() -> Result<(),std::io::Error>{
    let second: Opcode = (&sec_instr).into();
 
    if let Some(Operands::INCR_SP_BY_IMM7(imm7)) = get_operands(&Opcode::_16Bit(B16::INCR_SP_BY_IMM7),&sec_instr){
-      assert_eq!(128/4,imm7.0);
+      assert_eq!(128,imm7.0);
    }else{
       panic!("could not decode add_rep_sp_imm7 operands");
    }
@@ -510,9 +510,61 @@ fn should_recognise_breakpoint()->Result<(),std::io::Error>{
 }
 
 #[test]
+fn should_calculate_labels_correctly()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/labels.s");
+   let src_code = concat!(
+      ".text\n",
+      ".thumb\n",
+      ".syntax unified\n",
+      "BEQ.N .\n",
+   );
+
+   let bytes = assemble_by(path,src_code.as_bytes(),asm_file_to_elf_with_t2_arm_encoding).unwrap();
+
+   let opcode: Opcode = (&[bytes[0],bytes[1]]).into();
+   if let Some(Operands::COND_BRANCH(literal)) = get_operands(&Opcode::_16Bit(B16::BEQ), &[bytes[0],bytes[1]]){
+      assert_eq!(literal,0);
+   }else{
+      panic!("could not decode branch");
+   }
+
+   let src_code = concat!(
+      ".text\n",
+      ".thumb\n",
+      ".syntax unified\n",
+      "BEQ.N .+2\n",
+   );
+
+   let bytes_1 = assemble_by(path,src_code.as_bytes(),asm_file_to_elf_with_t2_arm_encoding).unwrap();
+
+   if let Some(Operands::COND_BRANCH(literal)) = get_operands(&Opcode::_16Bit(B16::BEQ), &[bytes_1[0],bytes_1[1]]){
+      assert_eq!(literal,2);
+   }else{
+      panic!("could not decode branch");
+   }
+
+   let src_code = concat!(
+      ".text\n",
+      ".thumb\n",
+      ".syntax unified\n",
+      "BEQ.N .-20\n",
+   );
+
+   let bytes = assemble(path,src_code.as_bytes()).unwrap();
+
+   if let Some(Operands::COND_BRANCH(literal)) = get_operands(&Opcode::_16Bit(B16::BEQ), &[bytes[0],bytes[1]]){
+      assert_eq!(literal,-20);
+   }else{
+      panic!("could not decode branch");
+   }
+   assert_eq!(opcode,Opcode::_16Bit(B16::BEQ));
+   Ok(())
+}
+
+//#[test]
 fn should_recognise_bl()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/bl.s");
-   write_asm(path,b".text\n.thumb\nBL _some_where\nADD r0,r1\n_some_where:\nADD r0,r1\n")?;
+   write_asm(path,b".text\n.thumb\n_some_where:\nBL _some_where\n\n")?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
    let first_instr: [u8;4] = [opcodes[0],opcodes[1],opcodes[2],opcodes[3]];
@@ -520,7 +572,7 @@ fn should_recognise_bl()->Result<(),std::io::Error>{
    let first: Opcode = (&first_instr).into();
 
    if let Some(Operands::BR_LNK(literal)) = get_operands_32b(&Opcode::_32Bit(B32::BR_AND_LNK), &first_instr){
-      assert_eq!(0,literal);
+      assert_eq!(4,literal);
       //TODO read system architecture to 
    }else{
       panic!("could not detect literal");

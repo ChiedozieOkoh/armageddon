@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::binutils::get_set_bits;
+use crate::binutils::{get_set_bits, signed_bitfield,umax,smin,smax};
 
 use super::{
    DestRegister,
@@ -12,7 +12,7 @@ use super::{
 };
 
 use crate::asm::decode::{Opcode,B16,B32};
-use crate::binutils::{from_arm_bytes_16b, get_bitfield, BitList};
+use crate::binutils::{from_arm_bytes_16b, get_bitfield, BitList,sign_extend};
 
 #[allow(non_camel_case_types)]
 #[derive(Debug)]
@@ -22,8 +22,8 @@ pub enum Operands{
    INCR_SP_BY_REG(Register),
    ADR(DestRegister,Literal<8>),
    ASRS_Imm5(DestRegister,SrcRegister,Literal<5>),
-   COND_BRANCH(Literal<8>),
-   B_ALWAYS(Literal<11>),
+   COND_BRANCH(i32),
+   B_ALWAYS(i32),
    BREAKPOINT(Literal<8>),
    BR_LNK(i32),
    BR_LNK_EXCHANGE(Register),
@@ -275,7 +275,8 @@ fn get_9b_register_triplet(hw: &HalfWord)->Operands{
 }
 
 fn get_add_reg_t2_operands(hw: &HalfWord)->Operands{
-   let dest: DestRegister = (hw[0] & 0x07).into();
+   let opt_dest_bit = (hw[0] & 0x80) >> 4;
+   let dest: DestRegister = ((hw[0] & 0x07) | opt_dest_bit).into();
    println!("rm=({:#02b} & {:#02b})= {:#02b}",hw[0],0x78,hw[0] & 0x78);
    let r = get_bitfield::<4>(hw[0] as u32,3);
    Operands::RegisterPair(dest,r.0.into())
@@ -283,12 +284,12 @@ fn get_add_reg_t2_operands(hw: &HalfWord)->Operands{
 
 fn get_add_reg_sp_imm8_operands(hw: &HalfWord)->Operands{
    let dest: u8 = hw[1] & 0x07;
-   Operands::ADD_REG_SP_IMM8(dest.into(),(hw[0] as u32).into())
+   Operands::ADD_REG_SP_IMM8(dest.into(),((hw[0] as u32) << 2).into())
 }
 
 fn get_add_reg_sp_imm7_operands(hw: &HalfWord)->Operands{
    let v = hw[0] & 0x7F;
-   Operands::INCR_SP_BY_IMM7((v as u32).into())
+   Operands::INCR_SP_BY_IMM7(((v as u32) << 2).into())
 }
 
 
@@ -311,14 +312,33 @@ fn get_asr_imm5_operands(hw: &HalfWord)->Operands{
 }
 
 fn get_cond_branch_operands(hw: &HalfWord)->Operands{
-   let label: Literal<8> = hw[0].into();
-   Operands::COND_BRANCH(label)
+   println!("raw: {:#x},{:#x}",hw[0],hw[1]);
+   println!("enc: {}_base10 {:#x}",hw[0],hw[0]);
+   println!("native: {}, {:#x}",hw[0] as i8,hw[0] as i8);
+   let shifted: Literal<9> = ((((hw[0]) as u32) << 1)).into();
+   println!("shifted: {}, {:#x}",shifted,shifted.0);
+   if shifted.0 & 0x100 > 0 {
+      println!("is signed");
+   }else {
+      println!("is unsigned");
+   }
+   let extended = sign_extend(shifted);
+   println!("ext: {}",extended);
+   debug_assert!(extended >= -256);
+   debug_assert!(extended <= 254);
+   debug_assert_eq!(extended.abs() % 2,0);
+   Operands::COND_BRANCH(extended + 4)
 }
 
 fn get_uncond_branch_operands(hw: &HalfWord)->Operands{
    let native: u16 = from_arm_bytes_16b(*hw);
    let label: Literal<11> = ((native & 0x07FF) as u32).into();
-   Operands::B_ALWAYS(label)
+   let adjusted: Literal<12> = (label.0 << 1).into();
+   let literal: i32 = sign_extend(adjusted);
+   debug_assert!(literal >= -2048);
+   debug_assert!(literal <= 2046);
+   debug_assert_eq!(literal.abs() % 2,0);
+   Operands::B_ALWAYS(literal)
 }
 
 fn get_breakpoint_operands(hw: &HalfWord)->Operands{
@@ -327,11 +347,13 @@ fn get_breakpoint_operands(hw: &HalfWord)->Operands{
 }
 
 fn get_branch_and_lnk_operands(bytes: &Word)->Operands{
+   println!("instr: [{:#x},{:#x},{:#x},{:#x}]",bytes[0],bytes[1],bytes[2],bytes[3]);
    let left_hw: [u8;2] = [bytes[0],bytes[1]];
    let native_l: u16 = from_arm_bytes_16b(left_hw);
 
    let right_hw: [u8;2] = [bytes[2],bytes[3]];
    let native_r: u16 = from_arm_bytes_16b(right_hw);
+   println!("native bin: {:#x},{:#x}",native_l,native_r);
    let imm10: u32 = (native_l & 0x03FF) as u32;
    let sign_bit: u32 = ((native_l & 0x0400) >> 10)as u32;
 
@@ -339,10 +361,12 @@ fn get_branch_and_lnk_operands(bytes: &Word)->Operands{
    let j1 = ((native_r & 0x2000) >> 13) as u32;
    let j2 = ((native_r & 0x0800) >> 11) as u32;
 
-   let i1: u32 = !(j1 ^ sign_bit);
-   let i2: u32 = !(j2 ^ sign_bit);
-   let u_total = (imm11 << 1) | (imm10 << 12) | (i2 << 23) | (i1 << 24) | (sign_bit << 25);
-   let sign_extended = if sign_bit > 0 {
+   let i1: u32 = !(j1 ^ sign_bit) & 0x1;
+   let i2: u32 = !(j2 ^ sign_bit) & 0x1;
+   println!("j1={}, j2={}, i1={}, i2={} s={}",j1,j2,i1,i2,sign_bit);
+   let u_total: u32 = ((imm11 << 1) | (imm10 << 12) | (i2 << 23) | (i1 << 24) | (sign_bit << 25)).into();
+   println!("utotal = {:#x}|{:#x}|{:#x}|{:#x}|{:#x}", imm11 << 1, imm10<<12, i2<<23,i1<<24, sign_bit<<25);
+   let sign_extended: u32 = if sign_bit > 0 {
       0xFD000000_u32 | u_total
    }else{
       u_total

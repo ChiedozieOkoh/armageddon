@@ -72,6 +72,19 @@ pub fn get_bitfield<const LEN: u32>(v: u32, start: u32)->BitField<LEN>{
    (res >> start).into()
 }
 
+pub fn sign_extend<const A: u32>(x: BitField<A>)->i32{
+   debug_assert!(A != 0);
+   let mask = 1 << (A-1);
+   if x.0 & mask > 0{
+      println!("adding extra bits");
+      let extra_bits = u32::MAX - umax::<A>();
+      println!("msk={:#x},val={:#x}\n{:#x} | {:#x} = {:#x}",extra_bits,x.0,extra_bits,x.0,extra_bits|x.0);
+      let extended = extra_bits | x.0;
+      extended as i32
+   }else{
+      x.0 as i32
+   }
+}
 #[inline]
 fn get_bitfield_u32(v: u32, start: u32, len: u32)->u32{
    debug_assert!(len != 0);
