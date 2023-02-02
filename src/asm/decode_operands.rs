@@ -364,19 +364,22 @@ fn get_branch_and_lnk_operands(bytes: &Word)->Operands{
    let i1: u32 = !(j1 ^ sign_bit) & 0x1;
    let i2: u32 = !(j2 ^ sign_bit) & 0x1;
    println!("j1={}, j2={}, i1={}, i2={} s={}",j1,j2,i1,i2,sign_bit);
-   let u_total: u32 = ((imm11 << 1) | (imm10 << 12) | (i2 << 23) | (i1 << 24) | (sign_bit << 25)).into();
-   println!("utotal = {:#x}|{:#x}|{:#x}|{:#x}|{:#x}", imm11 << 1, imm10<<12, i2<<23,i1<<24, sign_bit<<25);
+   println!("s:{:x}\ni1:{:x}\n:i2:{:x}\nimm10:{:x}\nimm11:{:x}\n",sign_bit,i1,i2,imm10,imm11);
+   println!("1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12));
+   println!("i1:i2:1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12) | (i2<<22)| (i1<<23));
+   println!("s:i1:i2:1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12) | (i2<<22)| (i1<<23) | (sign_bit) << 24);
+   let u_total: u32 = (imm11 << 1) | (imm10 << 12) | (i2 << 22) | (i1 << 23) | (sign_bit << 24);
    let sign_extended: u32 = if sign_bit > 0 {
-      0xFD000000_u32 | u_total
+      0xFE000000_u32 | u_total
    }else{
       u_total
    };
 
-   let typed_sign_extended = sign_extended as i32;
-   debug_assert_eq!(typed_sign_extended % 2,0);
-   debug_assert!(typed_sign_extended >= -16777216," within limit specified in ARMv6 ISA");
-   debug_assert!(typed_sign_extended <= 16777214," within limit specified in ARMv6 ISA");
-   Operands::BR_LNK(sign_extended as i32)
+   let result = sign_extended as i32 + 4_i32;
+   debug_assert_eq!(result % 2,0);
+   debug_assert!(result >= -16777216," within limit specified in ARMv6 ISA");
+   debug_assert!(result <= 16777214," within limit specified in ARMv6 ISA");
+   Operands::BR_LNK(result)
 }
 
 fn get_br_lnk_exchange_operands(hw: &HalfWord)->Operands{

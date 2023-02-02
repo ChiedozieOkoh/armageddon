@@ -576,10 +576,10 @@ fn should_calculate_labels_correctly()->Result<(),std::io::Error>{
    Ok(())
 }
 
-//#[test]
+#[test]
 fn should_recognise_bl()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/bl.s");
-   write_asm(path,b".text\n.thumb\n.syntax unified\nBL.W .-20\n\n")?;
+   write_asm(path,b".text\n.thumb\n.syntax unified\nBL.W .-252\n\n")?;
    let elf = asm_file_to_elf(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
    let first_instr: [u8;4] = [opcodes[0],opcodes[1],opcodes[2],opcodes[3]];
@@ -587,7 +587,7 @@ fn should_recognise_bl()->Result<(),std::io::Error>{
    let first: Opcode = (&first_instr).into();
 
    if let Some(Operands::BR_LNK(literal)) = get_operands_32b(&Opcode::_32Bit(B32::BR_AND_LNK), &first_instr){
-      assert_eq!(4,literal);
+      assert_eq!(-252,literal);
    }else{
       panic!("could not detect literal");
    }
