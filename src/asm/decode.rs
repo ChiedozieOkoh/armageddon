@@ -1,3 +1,5 @@
+use core::fmt;
+
 use super::{HalfWord,Word};
 use crate::binutils::from_arm_bytes_16b;
 #[allow(non_camel_case_types)] #[derive(Debug,PartialEq)]
@@ -94,6 +96,103 @@ pub enum B16{
    YIELD
 }
 
+impl fmt::Display for B16{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      match self{
+         B16::UNDEFINED => write!(f,"UDF"),
+         B16::ADCS => write!(f,"ADCS"),
+         B16::ADD_Imm3 => write!(f,"ADD"),
+         B16::ADD_Imm8 => write!(f,"ADD"),
+         B16::ADDS_REG => write!(f,"ADD"),
+         B16::ADDS_REG_T2 => write!(f,"ADD"),
+         B16::ADD_REG_SP_IMM8 => write!(f,"ADD"),
+         B16::INCR_SP_BY_IMM7 => write!(f,"ADD"),
+         B16::INCR_SP_BY_REG => write!(f,"ADD"),
+         B16::ADR => write!(f,"ADR"),
+         B16::ANDS => write!(f,"AND"),
+         B16::ASRS_Imm5 => write!(f,"ASR"),
+         B16::ASRS_REG => write!(f,"ASR"),
+         B16::SVC => write!(f,"SVC"),
+         B16::BEQ => write!(f,"BEQ"),
+         B16::BNEQ => write!(f,"BNE"),
+         B16::B_CARRY_IS_SET => write!(f,"BCS"),
+         B16::B_CARRY_IS_CLEAR => write!(f,"BCC"),
+         B16::B_IF_NEGATIVE => write!(f,"BMI"),
+         B16::B_IF_POSITIVE => write!(f,"BPL"),
+         B16::B_IF_OVERFLOW => write!(f,"BVS"),
+         B16::B_IF_NO_OVERFLOW => write!(f,"BVC"),
+         B16::B_UNSIGNED_HIGHER => write!(f,"BHI"),
+         B16::B_UNSIGNED_LOWER_OR_SAME => write!(f,"BLS"),
+         B16::B_GTE => write!(f,"BGE"),
+         B16::B_LTE => write!(f,"BLE"),
+         B16::B_GT => write!(f,"BGT"),
+         B16::B_LT => write!(f,"BLT"),
+         B16::B_ALWAYS => write!(f,"BAL"),
+         B16::BIT_CLEAR_REGISTER => write!(f,"BIC"),
+         B16::BREAKPOINT => write!(f,"BKPT"),
+         B16::BR_LNK_EXCHANGE => write!(f,"BLX"),
+         B16::BR_EXCHANGE => write!(f,"BX"),
+         B16::CMP_NEG_REG => write!(f,"CMN"),
+         B16::CMP_Imm8 => write!(f,"CMP"),
+         B16::CMP_REG_T1 => write!(f,"CMP"),
+         B16::CMP_REG_T2 => write!(f,"CMP"),
+         B16::CPS => Ok(()),//the instruction name is known by decode_operands
+         B16::XOR_REG => write!(f,"EOR"),
+         B16::LDM => write!(f,"LDM"),//load from base address sequencialy to register list
+         B16::LDR_Imm5 => write!(f,"LDR"),
+         B16::LDR_SP_Imm8 => write!(f,"LDR"),
+         B16::LDR_PC_Imm8 => write!(f,"LDR"),
+         B16::LDR_REGS => write!(f,"LDR"),
+         B16::LDRB_Imm5 => write!(f,"LDRB"),
+         B16::LDRB_REGS => write!(f,"LDRB"),
+         B16::LDRH_Imm5 => write!(f,"LDRH"),
+         B16::LDRH_REGS => write!(f,"LDRH"),
+         B16::LDRSB_REGS => write!(f,"LDRSB"),
+         B16::LDRSH_REGS => write!(f,"LDRSH"),
+         B16::LSL_Imm5 => write!(f,"LSL"),
+         B16::LSL_REGS => write!(f,"LSL"),
+         B16::LSR_Imm5 => write!(f,"LSR"),
+         B16::LSR_REGS => write!(f,"LSR"),
+         B16::MOV_Imm8 => write!(f,"MOV"),
+         B16::MOV_REGS_T1 => write!(f,"MOV"),
+         B16::MOV_REGS_T2 => write!(f,"MOV"),
+         B16::MUL => write!(f,"MUL"),
+         B16::MVN => write!(f,"MVN"),
+         B16::NOP => write!(f,"NOP"),
+         B16::ORR => write!(f,"ORR"),
+         B16::POP => write!(f,"POP"),
+         B16::PUSH => write!(f,"PUSH"),
+         B16::REV => write!(f,"REV"),
+         B16::REV_16 => write!(f,"REV16"),
+         B16::REVSH => write!(f,"REVSH"),
+         B16::ROR => write!(f,"ROR"),
+         B16::RSB => write!(f,"RSB"),
+         B16::SBC => write!(f,"SBC"),
+         B16::SEV => write!(f,"SEV"),
+         B16::STM => write!(f,"STM"),
+         B16::STR_Imm5 => write!(f,"STR"),
+         B16::STR_Imm8 => write!(f,"STR"),
+         B16::STR_REG => write!(f,"STR"),
+         B16::STRB_Imm5 => write!(f,"STRB"),
+         B16::STRB_REG => write!(f,"STRB"),
+         B16::STRH_Imm5 => write!(f,"STRH"),
+         B16::STRH_REG => write!(f,"STRH"),
+         B16::SUB_Imm3 => write!(f,"SUB"),
+         B16::SUB_Imm8 => write!(f,"SUB"),
+         B16::SUB_REG => write!(f,"SUB"),
+         B16::SUB_SP_Imm7 => write!(f,"SUB"),
+         B16::SXTB => write!(f,"SXTB"),
+         B16::SXTH => write!(f,"SXTH"),
+         B16::TST => write!(f,"TST"),
+         B16::UXTB => write!(f,"UXTB"),
+         B16::UXTH => write!(f,"UXTH"),
+         B16::WFE => write!(f,"WFE"),
+         B16::WFI => write!(f,"WFI"),
+         B16::YIELD => write!(f,"YIELD")
+     }
+   }
+}
+
 #[allow(non_camel_case_types)] #[derive(Debug,PartialEq)]
 pub enum B32{
    UNDEFINED,
@@ -104,11 +203,35 @@ pub enum B32{
    MRS,
    MSR,
 }
+
+impl fmt::Display for B32{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      match self{
+         B32::UNDEFINED => write!(f,"UDF.W"),
+         B32::BR_AND_LNK => write!(f,"BL"),
+         B32::DMB => write!(f,"DMB"),
+         B32::DSB => write!(f,"DSB"),
+         B32::ISB => write!(f,"ISB"),
+         B32::MRS => write!(f,"MRS"),
+         B32::MSR => write!(f,"MSR")
+      }
+   }
+}
+
 #[allow(non_camel_case_types)] #[derive(Debug,PartialEq)]
 pub enum Opcode{
    _32Bit(B32),
    _16Bit(B16)
 } 
+
+impl fmt::Display for Opcode{
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      match self{
+         Opcode::_32Bit(opc) => write!(f,"{}",opc),
+         Opcode::_16Bit(opc) => write!(f,"{}",opc) 
+      }       
+   }
+}
 
 impl From<&HalfWord> for Opcode{
    fn from(hw: &HalfWord)->Self{
@@ -319,27 +442,50 @@ fn shift_add_sub_mv_cmpr(hw: &HalfWord)->Opcode{
 }
 
 impl From<&Word> for Opcode{
-   fn from(a: &Word)->Self{
-      if bl_mask(&a){
-         return Opcode::_32Bit(B32::BR_AND_LNK);
+   fn from(word: &Word)->Self{
+      let op1 = (word[1] & 0x1C) >> 3;
+      let op = (word[3] & 0xC0)>>7;
+
+      match (op1,op){
+         (0,_) =>  panic!("cannot decode a 16bit instruction as 32bit"),
+         (1|3,_)=> Opcode::_32Bit(B32::UNDEFINED),
+         (2,0) => Opcode::_32Bit(B32::UNDEFINED), 
+         (2,1) => Opcode::_32Bit(branch_and_misc(word)),
+         _ => unreachable!(),
       }
-      
-      if udf_word_mask(&a){
-         return Opcode::_32Bit(B32::UNDEFINED);
-      }
-      return Opcode::_32Bit(B32::UNDEFINED);
    }
 }
 
 #[inline]
-const fn bl_mask(bytes: &Word)->bool{
-   (bytes[1] & 0xF8 == 0xF0)  && (bytes[3] & 0xD0 == 0xD0)
+fn branch_and_misc(bytes: &Word)->B32{
+   let first_u16 = from_arm_bytes_16b([bytes[0],bytes[1]]);
+   let op1 = (first_u16 & 0x07F0) >> 4;
+   let op2 = (bytes[3] & 0x70) >> 4;
+   for i in bytes{
+      print!("{:x}",i);
+   }
+   println!();
+   println!("{:x}",bytes[3]);
+   println!("{:x},{:x}",op2,op1);
+   match (op2,op1){
+      (0,0x38|0x39) => B32::MSR,
+      (0,0x3B) => control(bytes),
+      (0,0x3E | 0x3F) => B32::MRS,
+      (2,0x7F) => B32::UNDEFINED,
+      (0x5|0x7,_) => B32::BR_AND_LNK,
+      _ => unreachable!(),
+   }
 }
 
 #[inline]
-const fn udf_word_mask(bytes: &Word)->bool{
-   let hw_slice: HalfWord = [bytes[0],bytes[1]];
-   (from_arm_bytes_16b(hw_slice) & 0xFFF0 == 0xF7F0) && (bytes[3] & 0xF0 == 0xA0)
+fn control(bytes: &Word)->B32{
+   println!("control prefix: {:x}",bytes[2] & 0xF0);
+   match bytes[2] & 0xF0{
+      0x40 => B32::DSB,
+      0x50 => B32::DMB,
+      0x60 => B32::ISB,
+      _ => unreachable!(),
+   }
 }
 
 pub fn decode_opcodes(bytes: &[u8])->Vec<Opcode>{

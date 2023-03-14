@@ -8,8 +8,8 @@ pub fn print_assembly(bytes: &[u8]){
          let maybe_args = get_operands(&code, encoded_16b);
 
          match maybe_args{
-            Some(args) => format!("{:?} {}",code,pretty_print(&args)),
-            None => format!("{:?}",code)
+            Some(args) => format!("{} {}",code,pretty_print(&args)),
+            None => format!("{}",code)
          }
       },
       |code,encoded_32b|{
@@ -17,8 +17,8 @@ pub fn print_assembly(bytes: &[u8]){
           let maybe_args = get_operands_32b(&code, encoded_32b);
 
          match maybe_args{
-            Some(args) => format!("{:?} {}",code,pretty_print(&args)),
-            None => format!("{:?}",code)
+            Some(args) => format!("{} {}",code,pretty_print(&args)),
+            None => format!("{}",code)
          }
       }
    );

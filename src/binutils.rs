@@ -16,10 +16,6 @@ pub fn set_bit(bit: u32,word: u32)-> u32{
    word | (1 << bit)
 }
 
-#[inline]
-pub fn u16_to_arm_hword(v: u16)->u16{
-   u16::to_le(v)
-}
 
 #[inline]
 pub fn u32_to_arm_bytes(v: u32)-> [u8;4]{

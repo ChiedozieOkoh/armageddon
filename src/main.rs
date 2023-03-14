@@ -30,7 +30,8 @@ fn main() {
       "LDR r0,[r1,#20]\n",
       "BAL _label\n",
       "_label:\n",
-      "SVC #240\n"
+      "SVC #240\n",
+      "CPSID i\n"
    );
 
    let bytes = assemble(&path,src_code.as_bytes()).unwrap();

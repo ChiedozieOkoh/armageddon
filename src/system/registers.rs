@@ -2,6 +2,20 @@ use crate::binutils::{get_bit,set_bit,clear_bit,u32_to_arm_bytes,from_arm_bytes}
 use crate::asm::Word;
 pub type Apsr = Word;//Application Program Status Register
 
+#[derive(Debug,PartialEq)]
+pub enum SpecialRegister{
+   APSR,
+   IAPSR,
+   EAPSR,
+   XPSR,
+   IPSR,
+   EPSR,
+   IEPSR,
+   MSP,
+   PSP,
+   PRIMASK,
+   CONTROL
+}
 
 pub struct Registers{
    pub generic: [u32;13], //R0 -> R12

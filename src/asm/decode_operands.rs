@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use crate::binutils::{get_set_bits, signed_bitfield,umax,smin,smax};
+use crate::system::registers::SpecialRegister;
 
 use super::{
    DestRegister,
@@ -46,7 +47,11 @@ pub enum Operands{
    STR_REG(SrcRegister,Register,Register),
    SP_SUB(Literal<7>),
    Byte(Literal<8>),
-   EnableInterupt(bool)
+   HalfWord(Literal<16>),
+   EnableInterupt(bool),
+   MSR(SpecialRegister,SrcRegister),
+   MRS(DestRegister,SpecialRegister),
+   Nibble(Literal<4>)
 }
 
 pub fn pretty_print(operands: &Operands)->String{
@@ -75,9 +80,8 @@ pub fn pretty_print(operands: &Operands)->String{
          let registers = get_set_bits(*list);
          fmt_register_list(registers)
       },
-      Operands::EnableInterupt(_) => String::from("i"),
+      Operands::EnableInterupt(flag) => if *flag {String::from("CPSIE i")} else{String::from("CPSID i")},
       _ => {
-         //println!("tt--{:?}",operands);
          let dbg_operands = format!("{:?}",operands);
          remove_everything_outside_brackets(&dbg_operands)
       }
@@ -220,7 +224,12 @@ pub fn get_operands_32b(code: &Opcode, bytes: &Word)->Option<Operands>{
       Opcode::_32Bit(instruction) => {
          match instruction{
             B32::BR_AND_LNK => Some(get_branch_and_lnk_operands(bytes)),
-            _ => todo!()
+            B32::MRS => Some(get_mrs_operands(bytes)),
+            B32::MSR => Some(get_msr_operands(bytes)),
+            B32::DSB => Some(get_barrier_option(bytes)),
+            B32::ISB => Some(get_barrier_option(bytes)),
+            B32::DMB => Some(get_barrier_option(bytes)),
+            B32::UNDEFINED => Some(get_undefined_32b(bytes)),
          }
       }
    }
@@ -510,4 +519,40 @@ fn get_low_byte(hw: &HalfWord)->Operands{
 fn get_cps_operands(hw: &HalfWord)->Operands{
    let flat = (hw[0] & 0x10) == 0;
    Operands::EnableInterupt(flat)
+}
+
+fn get_msr_operands(bytes: &Word)->Operands{
+   Operands::MSR(get_special_register(bytes[2]),(bytes[0] & 0x0F).into())
+}
+
+fn get_mrs_operands(bytes: &Word)->Operands{
+   Operands::MRS((bytes[3] & 0x0F).into(),get_special_register(bytes[2]))
+}
+
+fn get_barrier_option(bytes: &Word)->Operands{
+   Operands::Nibble((bytes[2] & 0x0F).into())
+}
+
+fn get_undefined_32b(bytes: &Word)->Operands{
+   let imm4: u16 = (bytes[0] & 0x0F).into();
+   let later_u16 = from_arm_bytes_16b([bytes[2],bytes[3]]);
+   let imm12: u16 = later_u16 & 0x0FFF;
+   Operands::HalfWord(((imm4 << 12 | imm12) as u32).into())
+}
+
+fn get_special_register(byte: u8)->SpecialRegister{
+   match byte{
+      0 => SpecialRegister::APSR,
+      1 => SpecialRegister::IAPSR,
+      2 => SpecialRegister::EAPSR,
+      3 => SpecialRegister::XPSR,
+      5 => SpecialRegister::IPSR,
+      6 => SpecialRegister::EPSR,
+      7 => SpecialRegister::IEPSR,
+      8 => SpecialRegister::MSP,
+      9 => SpecialRegister::PSP,
+      16 => SpecialRegister::PRIMASK,
+      20 => SpecialRegister::CONTROL,
+      _ => unreachable!()
+   }
 }

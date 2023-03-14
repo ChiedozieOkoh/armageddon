@@ -6,6 +6,7 @@ use crate::asm::decode_operands::{
 
 use crate::elf::decoder::ElfError;
 use crate::asm::HalfWord;
+use crate::system::registers::SpecialRegister;
 use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::io::Write;
@@ -64,7 +65,27 @@ fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
    Ok(ret)
 }
 
-fn asm_file_to_elf_with_t2_arm_encoding(path: &Path)->Result<PathBuf,std::io::Error>{
+fn asm_file_to_elf_armv6(path: &Path)->Result<PathBuf,std::io::Error>{
+   println!("forcing T2 encoding");
+   use std::process::Command;
+   let mut fname = String::new();
+   fname.push_str(path.to_str().unwrap());
+   fname = fname.replace(".s", "");
+   fname.push_str(".elf");
+   println!("writing to {:?}",fname);
+   let ret = PathBuf::from(fname.clone());
+   Command::new("arm-none-eabi-as")
+      .arg(path.to_str().unwrap())
+      .arg("-march=armv6-m")
+      .arg("-o")
+      .arg(fname)
+      .status()
+      .expect("could not link");
+
+   Ok(ret)
+}
+
+fn asm_file_to_elf_armv6t2(path: &Path)->Result<PathBuf,std::io::Error>{
    println!("forcing T2 encoding");
    use std::process::Command;
    let mut fname = String::new();
@@ -133,12 +154,30 @@ fn assemble_by<F: Fn(&Path)->Result<PathBuf,IOError>>(path: &Path, asm: &[u8], a
    load_instruction_opcodes(&elf)
 }
 
+
+fn assemble_by_32b<F: Fn(&Path)->Result<PathBuf,IOError>> (path: &Path, asm: &[u8],assembler: F)->Result<Vec<u8>,IOError>{
+   write_asm(path,asm)?;
+   println!("running assembler");
+   let elf = assembler(path)?;
+   let opcodes = load_instruction_opcodes(&elf).unwrap();
+
+   std::fs::remove_file(path)?;
+   std::fs::remove_file(elf)?;
+
+   Ok(opcodes)
+}
+
 fn assemble_and_decode_32b<F: Fn(&Path)->Result<PathBuf,IOError>> (path: &Path, asm: &[u8],assembler: F)->Result<Opcode,IOError>{
    write_asm(path,asm)?;
+   println!("running assembler");
    let elf = assembler(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
    let first_instr: [u8;4] = [opcodes[0],opcodes[1],opcodes[2],opcodes[3]];
 
+   for i in first_instr{
+      print!("{:x}",i);
+   }
+   println!();
    let first: Opcode = (&first_instr).into();
 
    std::fs::remove_file(path)?;
@@ -222,7 +261,7 @@ pub fn should_recognise_add_with_immediates()-> Result<(),std::io::Error>{
 pub fn should_recognise_add_with_registers()-> Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/addr.s");
    write_asm(path,b".text\n.thumb\nADD r3,r2,r7\nADD r8,r12\n")?;
-   let elf = asm_file_to_elf_with_t2_arm_encoding(path)?;
+   let elf = asm_file_to_elf_armv6t2(path)?;
    let opcodes = load_instruction_opcodes(&elf).unwrap();
    let first_instr: [u8;2] = [opcodes[0], opcodes[1]];
    let sec_instr: [u8;2] = [opcodes[2],opcodes[3]];
@@ -519,7 +558,7 @@ fn should_calculate_labels_correctly()->Result<(),std::io::Error>{
       "BEQ.N .\n",
    );
 
-   let bytes = assemble_by(path,src_code.as_bytes(),asm_file_to_elf_with_t2_arm_encoding).unwrap();
+   let bytes = assemble_by(path,src_code.as_bytes(),asm_file_to_elf_armv6t2).unwrap();
 
    let opcode: Opcode = (&[bytes[0],bytes[1]]).into();
    if let Some(Operands::COND_BRANCH(literal)) = get_operands(&Opcode::_16Bit(B16::BEQ), &[bytes[0],bytes[1]]){
@@ -535,7 +574,7 @@ fn should_calculate_labels_correctly()->Result<(),std::io::Error>{
       "BEQ.N .+2\n",
    );
 
-   let bytes_1 = assemble_by(path,src_code.as_bytes(),asm_file_to_elf_with_t2_arm_encoding).unwrap();
+   let bytes_1 = assemble_by(path,src_code.as_bytes(),asm_file_to_elf_armv6t2).unwrap();
 
    if let Some(Operands::COND_BRANCH(literal)) = get_operands(&Opcode::_16Bit(B16::BEQ), &[bytes_1[0],bytes_1[1]]){
       assert_eq!(literal,2);
@@ -1047,7 +1086,7 @@ fn should_recognise_mov()->Result<(),std::io::Error>{
    let bytes = assemble_by(
       path,
       b".text\n.syntax unified\n.thumb\nMOVS.N r4,r7\n",
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
    let regs_t2: Opcode = (&[bytes[0],bytes[1]]).into();
    if let Some(Operands::MOV_REG(dest,src)) = get_operands(&Opcode::_16Bit(B16::MOV_REGS_T2), &[bytes[0],bytes[1]]){
@@ -1102,7 +1141,7 @@ fn should_recognise_nop()->Result<(),std::io::Error>{
    let bytes = assemble_by(
       path,
       b".text\n.syntax unified\n.thumb\nNOP\n",
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
    let encoding_t2: Opcode = (&[bytes[0],bytes[1]]).into();
 
@@ -1225,7 +1264,7 @@ fn should_recognise_rsb()->Result<(),std::io::Error>{
       path,
       b".text\n.thumb\nNEG r3,r1\n",// idk why gnu as doesn't assemble RSB D: NEG is the pre-UAL version of RSB tho:D
       // gnu as .. more like gnu ass
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
    let t1: Opcode = (&[bytes[0],bytes[1]]).into();
    if let Some(Operands::RegisterPair(dest, other)) = get_operands(&Opcode::_16Bit(B16::RSB), &[bytes[0],bytes[1]]){
@@ -1264,7 +1303,7 @@ fn should_recognise_sev()->Result<(),std::io::Error>{
    let bytes = assemble_by(
       path,
       b".text\n.thumb\nSEV\n",
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
    let t1: Opcode = (&[bytes[0],bytes[1]]).into();
 
@@ -1494,9 +1533,10 @@ fn should_recognise_udfw()->Result<(),std::io::Error>{
    let t1 = assemble_and_decode_32b(
       path,
       b".text\n.thumb\n.syntax unified\n UDF.W #101\n",
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
 
+   println!("raw {}",t1);
    assert_eq!(Opcode::_32Bit(B32::UNDEFINED),t1);
    Ok(())
 }
@@ -1508,7 +1548,7 @@ fn should_recognise_uxt()->Result<(),std::io::Error>{
    let bytes = assemble_by(
       path,
       b".text\n.thumb\nUXTB r4,r1\n", 
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
    let uxtb: Opcode = (&[bytes[0],bytes[1]]).into();
    if let Some(Operands::RegisterPair(a,b)) = get_operands(&Opcode::_16Bit(B16::UXTB), &[bytes[0],bytes[1]]){
@@ -1520,7 +1560,7 @@ fn should_recognise_uxt()->Result<(),std::io::Error>{
    let bytes = assemble_by(
       path,
       b".text\n.thumb\nUXTH r5,r7\n", 
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
    let uxth: Opcode = (&[bytes[0],bytes[1]]).into();
    if let Some(Operands::RegisterPair(a,b)) = get_operands(&Opcode::_16Bit(B16::UXTH), &[bytes[0],bytes[1]]){
@@ -1541,7 +1581,7 @@ fn should_recognise_wf()->Result<(),std::io::Error>{
    let bytes = assemble_by(
       path,
       b".thumb\n.text\nWFE\nWFI\n",
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
    let wfe: Opcode = (&[bytes[0],bytes[1]]).into();
    let wfi: Opcode = (&[bytes[2],bytes[3]]).into();
@@ -1561,9 +1601,116 @@ fn should_recognise_yield()->Result<(),std::io::Error>{
    let yield_opc = assemble_and_decode(
       path,
       b".thumb\n.text\nYIELD\n",
-      asm_file_to_elf_with_t2_arm_encoding
+      asm_file_to_elf_armv6t2
    ).unwrap();
 
    assert_eq!(Opcode::_16Bit(B16::YIELD),yield_opc);
    Ok(())
 }
+
+#[test]
+fn should_recognise_dmb()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/dmb.s");
+
+   let bytes = assemble_by_32b(
+      path,
+      b".text\nDMB #12\n",
+      asm_file_to_elf_armv6
+   ).unwrap();
+
+   let instr = &[bytes[0],bytes[1],bytes[2],bytes[3]];
+   assert_eq!(Opcode::_32Bit(B32::DMB),instr.into());
+   if let Some(Operands::Nibble(opt)) = get_operands_32b(&Opcode::_32Bit(B32::DMB), instr){
+      assert_eq!(opt.0,12);
+   }else{
+      panic!("could not decode dmb operands");
+   }
+
+   Ok(())
+}
+
+
+#[test]
+fn should_recognise_dsb()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/dsb.s");
+
+   let bytes = assemble_by_32b(
+      path,
+      b".text\nDSB #12\n",
+      asm_file_to_elf_armv6
+   ).unwrap();
+
+   let instr = &[bytes[0],bytes[1],bytes[2],bytes[3]];
+   assert_eq!(Opcode::_32Bit(B32::DSB),instr.into());
+   if let Some(Operands::Nibble(opt)) = get_operands_32b(&Opcode::_32Bit(B32::DSB), instr){
+      assert_eq!(opt.0,12);
+   }else{
+      panic!("could not decode dsb operands");
+   }
+
+   Ok(())
+}
+
+#[test]
+fn should_recognise_isb()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/isb.s");
+
+   let bytes = assemble_by_32b(
+      path,
+      b".text\nISB #13\n",
+      asm_file_to_elf_armv6
+   ).unwrap();
+
+   let instr = &[bytes[0],bytes[1],bytes[2],bytes[3]];
+   assert_eq!(Opcode::_32Bit(B32::ISB),instr.into());
+   if let Some(Operands::Nibble(opt)) = get_operands_32b(&Opcode::_32Bit(B32::ISB), instr){
+      assert_eq!(opt.0,13);
+   }else{
+      panic!("could not decode isb operands");
+   }
+
+   Ok(())
+}
+
+#[test]
+fn should_recognise_mrs()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/mrs.s");
+
+   let bytes = assemble_by_32b(
+      path,
+      b".text\n.thumb\nMRS R1, APSR\n",
+      asm_file_to_elf_armv6t2
+   ).unwrap();
+
+   let instr = &[bytes[0],bytes[1],bytes[2],bytes[3]];
+   assert_eq!(Opcode::_32Bit(B32::MRS),instr.into());
+   if let Some(Operands::MRS(reg,spc)) = get_operands_32b(&Opcode::_32Bit(B32::MRS), instr){
+      assert_eq!((reg.0, spc),(1,SpecialRegister::APSR));
+   }else{
+      panic!("could not decode isb operands");
+   }
+
+   Ok(())
+}
+
+#[test]
+fn should_recognise_msr()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/msr.s");
+
+   let bytes = assemble_by_32b(
+      path,
+      b".text\n.thumb\nMSR APSR, R7\n",
+      asm_file_to_elf_armv6t2
+   ).unwrap();
+
+   let instr = &[bytes[0],bytes[1],bytes[2],bytes[3]];
+   assert_eq!(Opcode::_32Bit(B32::MSR),instr.into());
+   if let Some(Operands::MSR(spc,reg)) = get_operands_32b(&Opcode::_32Bit(B32::MSR), instr){
+      assert_eq!((spc,reg.0),(SpecialRegister::APSR,7));
+   }else{
+      panic!("could not decode isb operands");
+   }
+
+   Ok(())
+}
+
