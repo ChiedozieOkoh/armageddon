@@ -6,18 +6,23 @@ pub fn print_assembly(bytes: &[u8]){
       bytes, 
       |code,encoded_16b|{
          let maybe_args = get_operands(&code, encoded_16b);
-
          match maybe_args{
-            Some(args) => format!("{} {}",code,pretty_print(&args)),
+            Some(args) => {
+               if code == Opcode::_16Bit(B16::CPS){
+                  format!("{}",pretty_print(&args))
+               }else{
+                  format!("{} {}",code,pretty_print(&args))
+               }
+            },
             None => format!("{}",code)
          }
       },
       |code,encoded_32b|{
-         //String::from("<decoding 32b instruction operands is not implemented yet >")
-          let maybe_args = get_operands_32b(&code, encoded_32b);
-
+         let maybe_args = get_operands_32b(&code, encoded_32b);
          match maybe_args{
-            Some(args) => format!("{} {}",code,pretty_print(&args)),
+            Some(args) => {
+               format!("{} {}",code,pretty_print(&args))
+            },
             None => format!("{}",code)
          }
       }

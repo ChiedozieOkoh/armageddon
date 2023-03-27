@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::io::{BufReader, Read,Seek};
 use std::path::Path; 
 use std::fs::File;
@@ -179,6 +180,14 @@ impl From<std::io::Error> for ElfError{
    }
 } 
 
+impl Display for ElfError{
+   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      match self{
+         ElfError::FileIO(msg) => write!(f,"{}",msg),
+         ElfError::Arch(msg) =>write!(f, "{}",msg)
+      }
+   }
+}
 
 pub fn get_header(file: &Path)-> Result<(ElfHeader, BufReader<File>),ElfError>{
    let f = File::open(file)?;

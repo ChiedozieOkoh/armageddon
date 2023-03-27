@@ -7,7 +7,6 @@ mod binutils;
 #[cfg(test)]
 mod tests;
 
-use crate::binutils::{get_bit,clear_bit};
 use std::path::{Path,PathBuf};
 use std::fs::File;
 use std::io::Write;
@@ -15,27 +14,16 @@ use elf::decoder::ElfError;
 
 use crate::asm::interpreter::print_assembly;
 fn main() {
-    assert_eq!(get_bit(1,3),1);
-    assert_eq!(get_bit(0,3),1);
-    assert_eq!(get_bit(2,3),0);
+   let args: Vec<String> = std::env::args().collect();
+   if args.len() != 2{
+      println!("you must provide one elf file");
+      std::process::exit(-1);
+   }
 
-    println!("{:04b}",10);
-    assert_eq!(clear_bit(1, 10),8);
-
-   let path = Path::new("assembly_tests/adc.s");
-   let src_code = concat!(
-      ".text\n.thumb\n",
-      "ADC r0,r1\n",
-      "LDM r7!, {r1,r2,r3}\n",
-      "LDR r0,[r1,#20]\n",
-      "BAL _label\n",
-      "_label:\n",
-      "SVC #240\n",
-      "CPSID i\n"
-   );
-
-   let bytes = assemble(&path,src_code.as_bytes()).unwrap();
-
+   let maybe_file = Path::new(&args[1]);
+   let maybe_instructions  = load_instruction_opcodes(maybe_file);
+   exit_on_err(&maybe_instructions);
+   let bytes = maybe_instructions.unwrap();
    print_assembly(&bytes[..]);
 }
 
@@ -80,7 +68,7 @@ fn load_instruction_opcodes(file: &Path)->Result<Vec<u8>,ElfError>{
       is_text_section_hdr,
       read_text_section
    };
-   let (elf_header,mut reader) = get_header(file).unwrap();
+   let (elf_header,mut reader) = get_header(file)?;
 
    let section_headers = get_all_section_headers(&mut reader, &elf_header)?;
    println!("sect_hdrs {:?}",section_headers);
@@ -99,3 +87,9 @@ fn load_instruction_opcodes(file: &Path)->Result<Vec<u8>,ElfError>{
    Ok(text_section)
 }
 
+fn exit_on_err<T>(maybe_err: &Result<T,ElfError>){
+   match maybe_err{
+      Err(e) => {println!("{}",e); std::process::exit(-1);},
+      Ok(_) => {}
+   }
+}
