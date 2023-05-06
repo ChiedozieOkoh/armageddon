@@ -38,8 +38,11 @@ fn disassemble<T,F: Fn(Opcode,&[u8;2])->T, G: Fn(Opcode,&[u8;4])->T>(bytes: &[u8
    while i < bytes.len(){
       let hw: &[u8;2] = &bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
       let thumb_instruction = Opcode::from(hw);
+      //TODO use the ISA specified way of checking whether a instruction is 32b or 16b
+      // UNDEFINED is a valid instruction and should not be used this way.
       if thumb_instruction == Opcode::_16Bit(B16::UNDEFINED){
          if i + 4 > bytes.len(){
+         println!("dont know wtf this is and its not 32b");
             break;
          }
          let word: &[u8;4] = &bytes[i..i+4].try_into().expect("should be 4byte aligned");
