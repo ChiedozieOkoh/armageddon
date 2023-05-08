@@ -6,7 +6,7 @@ use crate::elf::decoder::{
    get_all_section_headers,
    is_text_section_hdr,
    SectionHeader,
-   read_text_section, is_symbol_table_section_hdr, get_local_symbols, get_string_table_section_hdr, get_matching_symbol_names
+   read_text_section, is_symbol_table_section_hdr, get_local_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map, remove_assembler_artifact_symbols, get_text_section_symbols
 };
 
 fn write_asm_make_elf(path: &Path, data: &[u8])->Result<PathBuf, std::io::Error>{
@@ -102,7 +102,10 @@ fn should_get_local_symbols(){
          "_some_other_label:\n",
          "   NOP\n",
          "_la_foo:\n",
-         "  WFE\n\n"
+         "   WFE\n\n",
+         ".data\n",
+         "   _msg:\n",
+         "   .string \"Hello word\"\n\n"
      ).as_bytes()
    ).unwrap();
    //let file = Path::new("./assembly_tests/symbols.o");
@@ -123,11 +126,23 @@ fn should_get_local_symbols(){
    println!("header {:?}",maybe_symtab[0]);
 
    
-   let sym_entries = get_local_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
-
-   let names = get_matching_symbol_names(&mut reader, &elf_header, &sym_entries, &str_table_hdr).unwrap();
-   println!("{:?}",names);
+   let mut sym_entries = get_local_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
+   let text_section_symbols = get_text_section_symbols(&elf_header, &section_headers, &sym_entries).unwrap();
+   let mut names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
    assert!(names.contains(&String::from("_some_label")));
    assert!(names.contains(&String::from("_some_other_label")));
    assert!(names.contains(&String::from("_la_foo")));
+
+   remove_assembler_artifact_symbols(&mut names, &mut sym_entries);
+   println!("symbols without gnu assembler artifict ($t): {:?}",names);
+
+   let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);
+   println!("{:?}",text_sect_offset_map);
+   assert_eq!(text_sect_offset_map.get(&0),Some(&String::from("_some_label")));
+   assert_eq!(text_sect_offset_map.get(&8),Some(&String::from("_some_other_label")));
+   assert_eq!(text_sect_offset_map.get(&10),Some(&String::from("_la_foo")));
+   assert_eq!(text_sect_offset_map.values().position(|v| v.eq("_msg")),None);
+
+   //TODO test to ensure we can correctly retrive data segment symbols
+   //TODO test to ensure we can source see data segment symbols in text segment i.e BL .end dissassembles propperly
 }
