@@ -7,12 +7,14 @@ mod binutils;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::path::{Path,PathBuf};
 use std::fs::File;
 use std::io::Write;
 use elf::decoder::ElfError;
 
 use crate::asm::interpreter::print_assembly;
+use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_local_symbols, get_text_section_symbols, get_matching_symbol_names, remove_assembler_artifact_symbols, build_symbol_byte_offset_map};
 fn main() {
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{
@@ -23,15 +25,15 @@ fn main() {
    let maybe_file = Path::new(&args[1]);
    let maybe_instructions  = load_instruction_opcodes(maybe_file);
    exit_on_err(&maybe_instructions);
-   let bytes = maybe_instructions.unwrap();
-   print_assembly(&bytes[..]);
+   let (instructions, symbol_map) = maybe_instructions.unwrap();
+   print_assembly(&instructions[..],&symbol_map);
 }
 
-fn assemble(path: &Path, asm: &[u8])->Result<Vec<u8>,ElfError>{
+/*fn assemble(path: &Path, asm: &[u8])->Result<Vec<u8>,ElfError>{
    write_asm(path,asm)?;
    let elf = asm_file_to_elf(path)?;
    load_instruction_opcodes(&elf)
-}
+}*/
 
 fn write_asm(path: &Path, data: &[u8])->Result<File,std::io::Error>{
    println!("writing  asm to {:?}",path);
@@ -60,7 +62,7 @@ fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
    Ok(ret)
 }
 
-fn load_instruction_opcodes(file: &Path)->Result<Vec<u8>,ElfError>{
+fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, HashMap<usize, String>),ElfError>{
    use crate::elf::decoder::{
       SectionHeader,
       get_header,
@@ -74,7 +76,7 @@ fn load_instruction_opcodes(file: &Path)->Result<Vec<u8>,ElfError>{
    println!("sect_hdrs {:?}",section_headers);
    assert!(!section_headers.is_empty());
 
-   let text_sect_hdr: Vec<SectionHeader> = section_headers.into_iter()
+   let text_sect_hdr: Vec<&SectionHeader> = section_headers.iter()
       .filter(|hdr| is_text_section_hdr(&elf_header, hdr))
       .collect();
 
@@ -83,8 +85,21 @@ fn load_instruction_opcodes(file: &Path)->Result<Vec<u8>,ElfError>{
    let sect_hdr = &text_sect_hdr[0];
 
    let text_section = read_text_section(&mut reader, &elf_header, sect_hdr)?;
-   assert!(!text_section.is_empty());
-   Ok(text_section)
+
+   let strtab_idx = get_string_table_section_hdr(&elf_header, &section_headers).unwrap();
+   let str_table_hdr = &section_headers[strtab_idx];
+
+   let maybe_symtab: Vec<&SectionHeader> = section_headers.iter()
+      .filter(|hdr| is_symbol_table_section_hdr(&elf_header, hdr))
+      .collect();
+
+   let mut sym_entries = get_local_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
+   let text_section_symbols = get_text_section_symbols(&elf_header, &section_headers, &sym_entries).unwrap();
+   let mut names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
+   remove_assembler_artifact_symbols(&mut names, &mut sym_entries);
+   let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);
+
+   Ok((text_section, text_sect_offset_map))
 }
 
 fn exit_on_err<T>(maybe_err: &Result<T,ElfError>){

@@ -268,6 +268,21 @@ impl From<&HalfWord> for Opcode{
    }
 }
 
+#[derive(Debug,PartialEq)]
+pub enum InstructionSize{
+   B16,
+   B32
+}
+
+#[inline]
+pub fn instruction_size(opcode: &[u8;2])->InstructionSize{
+   let header = opcode[1] & 0xF8;
+   match header{
+      0xE8 | 0xF0 | 0xF8 => InstructionSize::B32,
+      _ => InstructionSize::B16
+   }
+}
+
 #[inline]
 fn data_proccess(hw: &HalfWord)->Opcode{
    let native = from_arm_bytes_16b(*hw);

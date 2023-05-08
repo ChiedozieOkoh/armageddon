@@ -479,12 +479,12 @@ pub fn build_symbol_byte_offset_map(
    elf_header: &ElfHeader,
    names: Vec<String>,
    sym_entries: &Vec<SymbolTableEntry>
-)->HashMap<u32, String>{
+)->HashMap<usize, String>{
    let mut offset_map = HashMap::new();
    for (i, name) in names.into_iter().enumerate(){
       let symbol = &sym_entries[i];
       let offset: u32 = to_native_endianness_32b(&elf_header, &symbol.value);
-      offset_map.insert(offset, name);
+      offset_map.insert(offset as usize, name);
    }
 
    return offset_map;

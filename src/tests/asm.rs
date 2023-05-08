@@ -1,5 +1,5 @@
 use crate::binutils::get_set_bits;
-use crate::asm::decode::{Opcode,B32,B16};
+use crate::asm::decode::{Opcode,B32,B16, instruction_size, InstructionSize};
 use crate::asm::decode_operands::{
    get_operands, Operands, get_operands_32b
 };
@@ -1714,3 +1714,25 @@ fn should_recognise_msr()->Result<(),std::io::Error>{
    Ok(())
 }
 
+#[test]
+fn should_recognise_instruction_size()->Result<(),std::io::Error>{
+   let path = Path::new("assembly_tests/instruction_size.s");
+
+   let bytes = assemble_by_32b(
+      path,
+      concat!(
+         ".text\n",
+         ".thumb\n",
+         "MSR APSR, r7\n",
+         "ADD r0, #7\n"
+         ).as_bytes(),
+      asm_file_to_elf_armv6t2
+   ).unwrap();
+
+   let instr_32 = &[bytes[0], bytes[1]];
+   let instr_16 = &[bytes[4],bytes[5]];
+
+   assert_eq!(instruction_size(&instr_32), InstructionSize::B32);
+   assert_eq!(instruction_size(&instr_16), InstructionSize::B16);
+   Ok(())
+}
