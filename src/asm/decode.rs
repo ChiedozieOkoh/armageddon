@@ -2,6 +2,9 @@ use core::fmt;
 
 use super::{HalfWord,Word};
 use crate::binutils::from_arm_bytes_16b;
+
+use crate::{dbg_ln, dbg_print};
+
 #[allow(non_camel_case_types)] #[derive(Debug,PartialEq)]
 pub enum B16{
    UNDEFINED,
@@ -337,11 +340,11 @@ fn special_data(hw: &HalfWord)->Opcode{
 
 #[inline]
 fn load_store_single(hw: &HalfWord)->Opcode{
-   println!("{:#x}",hw[1]);
+   dbg_ln!("{:#x}",hw[1]);
    let op_a = (hw[1] & 0xF0) >> 4;
    let op_b = (hw[1] & 0x0E) >> 1;
 
-   println!("a:{},b:{}",op_a,op_b);
+   dbg_ln!("a:{},b:{}",op_a,op_b);
    match op_a{
       5 => {
          match op_b{
@@ -477,11 +480,11 @@ fn branch_and_misc(bytes: &Word)->B32{
    let op1 = (first_u16 & 0x07F0) >> 4;
    let op2 = (bytes[3] & 0x70) >> 4;
    for i in bytes{
-      print!("{:x}",i);
+      dbg_print!("{:x}",i);
    }
-   println!();
-   println!("{:x}",bytes[3]);
-   println!("{:x},{:x}",op2,op1);
+   dbg_ln!();
+   dbg_ln!("{:x}",bytes[3]);
+   dbg_ln!("{:x},{:x}",op2,op1);
    match (op2,op1){
       (0,0x38|0x39) => B32::MSR,
       (0,0x3B) => control(bytes),
@@ -494,7 +497,7 @@ fn branch_and_misc(bytes: &Word)->B32{
 
 #[inline]
 fn control(bytes: &Word)->B32{
-   println!("control prefix: {:x}",bytes[2] & 0xF0);
+   dbg_ln!("control prefix: {:x}",bytes[2] & 0xF0);
    match bytes[2] & 0xF0{
       0x40 => B32::DSB,
       0x50 => B32::DMB,

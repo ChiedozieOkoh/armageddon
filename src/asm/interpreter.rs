@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::asm::decode::{Opcode,B16};
 use super::{decode_operands::{get_operands, pretty_print, get_operands_32b}, decode::{instruction_size, InstructionSize}};
 
+//TODO get text section symbol offset, use that to recognise symbols by relative byte offset.
 pub fn print_assembly(bytes: &[u8], text_symbol_map: &HashMap<usize, String>){
    let src_code = disassemble(
       bytes,

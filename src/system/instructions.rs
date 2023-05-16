@@ -15,6 +15,8 @@ use crate::binutils::{
    signed_bitfield
 };
 
+use crate::dbg_ln;
+
 fn add_immediate(apsr: &mut Apsr, a: u32, b: u32)->u32{
     let (sum, carry, overflow) = add_with_carry::<31>(a.into(),b.into(),0);
    if carry{
@@ -71,15 +73,15 @@ fn left_shift_left_with_carry(a: u32,shift: u32, carry: u32)->(u32,u32){
 }
 pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-> (u32, bool, bool){
    let sum: u32 = a.0 + b.0 + carry;
-   println!("sum= {}",sum);
+   dbg_ln!("sum= {}",sum);
    let signed_sum: i32 = signed_bitfield::<L>(a) + signed_bitfield::<L>(b) + carry as i32;
    let result = clear_bit(L, sum);
-   println!("Ssum = {} + {} + {}",signed_bitfield::<L>(a),signed_bitfield::<L>(b),carry);
-   println!("signed sum={}",signed_sum);
+   dbg_ln!("Ssum = {} + {} + {}",signed_bitfield::<L>(a),signed_bitfield::<L>(b),carry);
+   dbg_ln!("signed sum={}",signed_sum);
    let carry_out = result != sum;
-   println!("res({}) != Usum({}) = {}",result,sum,carry_out);
+   dbg_ln!("res({}) != Usum({}) = {}",result,sum,carry_out);
    let overflow = signed_bitfield::<L>(sum.into()) != signed_sum;
-   println!("Sres({}) != Ssum({}) = {}",signed_bitfield::<L>(sum.into()),signed_sum,overflow);
+   dbg_ln!("Sres({}) != Ssum({}) = {}",signed_bitfield::<L>(sum.into()),signed_sum,overflow);
    (result,carry_out,overflow)
 }
 

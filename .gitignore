@@ -2,3 +2,5 @@
 /assembly_tests
 a.out
 *.s
+*.out
+*.o

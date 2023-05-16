@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use crate::binutils::{get_set_bits, signed_bitfield,umax,smin,smax};
 use crate::system::registers::SpecialRegister;
+use crate::dbg_ln;
 
 use super::{
    DestRegister,
@@ -286,7 +287,7 @@ fn get_9b_register_triplet(hw: &HalfWord)->Operands{
 fn get_add_reg_t2_operands(hw: &HalfWord)->Operands{
    let opt_dest_bit = (hw[0] & 0x80) >> 4;
    let dest: DestRegister = ((hw[0] & 0x07) | opt_dest_bit).into();
-   println!("rm=({:#02b} & {:#02b})= {:#02b}",hw[0],0x78,hw[0] & 0x78);
+   dbg_ln!("rm=({:#02b} & {:#02b})= {:#02b}",hw[0],0x78,hw[0] & 0x78);
    let r = get_bitfield::<4>(hw[0] as u32,3);
    Operands::RegisterPair(dest,r.0.into())
 }
@@ -321,18 +322,18 @@ fn get_asr_imm5_operands(hw: &HalfWord)->Operands{
 }
 
 fn get_cond_branch_operands(hw: &HalfWord)->Operands{
-   println!("raw: {:#x},{:#x}",hw[0],hw[1]);
-   println!("enc: {}_base10 {:#x}",hw[0],hw[0]);
-   println!("native: {}, {:#x}",hw[0] as i8,hw[0] as i8);
+   dbg_ln!("raw: {:#x},{:#x}",hw[0],hw[1]);
+   dbg_ln!("enc: {}_base10 {:#x}",hw[0],hw[0]);
+   dbg_ln!("native: {}, {:#x}",hw[0] as i8,hw[0] as i8);
    let shifted: Literal<9> = ((((hw[0]) as u32) << 1)).into();
-   println!("shifted: {}, {:#x}",shifted,shifted.0);
+   dbg_ln!("shifted: {}, {:#x}",shifted,shifted.0);
    if shifted.0 & 0x100 > 0 {
-      println!("is signed");
+      dbg_ln!("is signed");
    }else {
-      println!("is unsigned");
+      dbg_ln!("is unsigned");
    }
    let extended = sign_extend(shifted) + 4;
-   println!("ext: {}",extended);
+   dbg_ln!("ext: {}",extended);
    debug_assert!(extended >= -256);
    debug_assert!(extended <= 254);
    debug_assert_eq!(extended.abs() % 2,0);
@@ -356,13 +357,13 @@ fn get_breakpoint_operands(hw: &HalfWord)->Operands{
 }
 
 fn get_branch_and_lnk_operands(bytes: &Word)->Operands{
-   println!("instr: [{:#x},{:#x},{:#x},{:#x}]",bytes[0],bytes[1],bytes[2],bytes[3]);
+   dbg_ln!("instr: [{:#x},{:#x},{:#x},{:#x}]",bytes[0],bytes[1],bytes[2],bytes[3]);
    let left_hw: [u8;2] = [bytes[0],bytes[1]];
    let native_l: u16 = from_arm_bytes_16b(left_hw);
 
    let right_hw: [u8;2] = [bytes[2],bytes[3]];
    let native_r: u16 = from_arm_bytes_16b(right_hw);
-   println!("native bin: {:#x},{:#x}",native_l,native_r);
+   dbg_ln!("native bin: {:#x},{:#x}",native_l,native_r);
    let imm10: u32 = (native_l & 0x03FF) as u32;
    let sign_bit: u32 = ((native_l & 0x0400) >> 10)as u32;
 
@@ -372,11 +373,11 @@ fn get_branch_and_lnk_operands(bytes: &Word)->Operands{
 
    let i1: u32 = !(j1 ^ sign_bit) & 0x1;
    let i2: u32 = !(j2 ^ sign_bit) & 0x1;
-   println!("j1={}, j2={}, i1={}, i2={} s={}",j1,j2,i1,i2,sign_bit);
-   println!("s:{:x}\ni1:{:x}\n:i2:{:x}\nimm10:{:x}\nimm11:{:x}\n",sign_bit,i1,i2,imm10,imm11);
-   println!("1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12));
-   println!("i1:i2:1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12) | (i2<<22)| (i1<<23));
-   println!("s:i1:i2:1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12) | (i2<<22)| (i1<<23) | (sign_bit) << 24);
+   dbg_ln!("j1={}, j2={}, i1={}, i2={} s={}",j1,j2,i1,i2,sign_bit);
+   dbg_ln!("s:{:x}\ni1:{:x}\n:i2:{:x}\nimm10:{:x}\nimm11:{:x}\n",sign_bit,i1,i2,imm10,imm11);
+   dbg_ln!("1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12));
+   dbg_ln!("i1:i2:1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12) | (i2<<22)| (i1<<23));
+   dbg_ln!("s:i1:i2:1mm10:imm11:0 = {:x}",(imm11<<1) | (imm10<<12) | (i2<<22)| (i1<<23) | (sign_bit) << 24);
    let u_total: u32 = (imm11 << 1) | (imm10 << 12) | (i2 << 22) | (i1 << 23) | (sign_bit << 24);
    let sign_extended: u32 = if sign_bit > 0 {
       0xFE000000_u32 | u_total
@@ -464,7 +465,7 @@ fn get_ls_imm5_operands(hw: &HalfWord)->Operands{
 
 fn get_mov_reg_operands<const L: u32>(hw: &HalfWord)->Operands{
    let dest: DestRegister = if L == 4{
-      //println!("using extra byte");
+      //dbg_ln!("using extra byte");
       let d = ((hw[0] & 0x80) >> 4) | (hw[0] & 0x07);
       d.into()
    }else{

@@ -1,13 +1,15 @@
+use crate::dbg_ln;
+
 #[inline]
 pub fn get_bit(bit: u32,word: u32)-> u32{
-   println!("mask={:04b} & value={:04b}",(1<<bit),word);
+   dbg_ln!("mask={:04b} & value={:04b}",(1<<bit),word);
    ((1 << bit) & word) >> bit
 }
 
 #[inline]
 pub fn clear_bit(bit: u32,word: u32)-> u32{
    let mask = !(1 << bit);
-   println!("{:04b} & {:04b}",word,mask);
+   dbg_ln!("{:04b} & {:04b}",word,mask);
    word & mask
 }
 
@@ -63,7 +65,7 @@ pub fn get_bitfield<const LEN: u32>(v: u32, start: u32)->BitField<LEN>{
    debug_assert!(LEN != 0);
    let last_bit = 1 << (LEN -1);
    let mask = (last_bit | last_bit - 1) << start;
-   println!("v={:#02b},m={:#02b}",v,mask);
+   dbg_ln!("v={:#02b},m={:#02b}",v,mask);
    let res = v & mask;
    (res >> start).into()
 }
@@ -72,21 +74,22 @@ pub fn sign_extend<const A: u32>(x: BitField<A>)->i32{
    debug_assert!(A != 0);
    let mask = 1 << (A-1);
    if x.0 & mask > 0{
-      println!("adding extra bits");
+      dbg_ln!("adding extra bits");
       let extra_bits = u32::MAX - umax::<A>();
-      println!("msk={:#x},val={:#x}\n{:#x} | {:#x} = {:#x}",extra_bits,x.0,extra_bits,x.0,extra_bits|x.0);
+      dbg_ln!("msk={:#x},val={:#x}\n{:#x} | {:#x} = {:#x}",extra_bits,x.0,extra_bits,x.0,extra_bits|x.0);
       let extended = extra_bits | x.0;
       extended as i32
    }else{
       x.0 as i32
    }
 }
+
 #[inline]
 fn get_bitfield_u32(v: u32, start: u32, len: u32)->u32{
    debug_assert!(len != 0);
    let last_bit = 1 << (len -1);
    let mask = (last_bit | last_bit - 1) << start;
-   println!("v={:#02b},m={:#02b}",v,mask);
+   dbg_ln!("v={:#02b},m={:#02b}",v,mask);
    let res = v & mask;
    res >> start
 }
@@ -112,12 +115,12 @@ pub fn clear_extra<const L: u32>(a: BitField<L>)->BitField<L>{
 }
 
 pub fn signed_bitfield<const L: u32>(a: BitField<L>)->i32{
-   println!("making signed bitfield");
+   dbg_ln!("making signed bitfield");
    if get_bit(L - 1,a.0)  == 0{
-      println!("ret={}",a.0);
+      dbg_ln!("ret={}",a.0);
       a.0 as i32
    }else{
-      println!("ret=({} - {})",a.0 as i32,1<<L);
+      dbg_ln!("ret=({} - {})",a.0 as i32,1<<L);
       a.0 as i32  - (1<<L)
    }
 }
@@ -127,7 +130,7 @@ pub fn get_set_bits(bytes: BitList)->Vec<u8>{
    let mut bits = Vec::new();
    for shift in 0..16{
       let set = (1 << shift) & bytes > 0;
-      //println!("{:#x} & {:#x} = {:?}",(1<<shift),bytes,set);
+      //dbg_ln!("{:#x} & {:#x} = {:?}",(1<<shift),bytes,set);
       if set{
          bits.push(shift as u8);
       }
