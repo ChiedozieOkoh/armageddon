@@ -6,7 +6,7 @@ use crate::elf::decoder::{
    get_all_section_headers,
    is_text_section_hdr,
    SectionHeader,
-   read_text_section, is_symbol_table_section_hdr, get_local_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map, remove_assembler_artifact_symbols, get_text_section_symbols
+   read_text_section, is_symbol_table_section_hdr, get_local_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map, remove_assembler_artifact_symbols, get_text_section_symbols, get_entry_point_offset
 };
 
 fn write_asm_make_elf(path: &Path, data: &[u8])->Result<PathBuf, std::io::Error>{
@@ -108,9 +108,11 @@ fn should_get_local_symbols(){
          "   .string \"Hello word\"\n\n"
      ).as_bytes()
    ).unwrap();
-   //let file = Path::new("./assembly_tests/symbols.o");
+
    println!("made elf {:?}",file);
    let (elf_header,mut reader) = get_header(&file).unwrap();
+
+   assert_eq!(0,get_entry_point_offset(&elf_header), "elf hasn't been linked so it should be 0");
 
    let section_headers = get_all_section_headers(&mut reader, &elf_header).unwrap();
    println!("sect_hdrs {:?}",section_headers);
@@ -123,7 +125,7 @@ fn should_get_local_symbols(){
       .filter(|hdr| is_symbol_table_section_hdr(&elf_header, hdr))
       .collect();
 
-   println!("header {:?}",maybe_symtab[0]);
+   println!("header {:#?}",maybe_symtab[0]);
 
    
    let mut sym_entries = get_local_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();

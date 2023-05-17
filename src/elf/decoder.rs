@@ -92,7 +92,7 @@ pub struct ElfHeader{
    pub e_type: ElfHalf,
    pub machine: ElfHalf,
    pub version: ElfWord,
-   pub _entry_point: Addr,// this is the address of main() we dont care about this
+   pub _entry_point: Addr,// turns out this is very useful :D
    pub program_header_offset: ElfOffset,
    pub section_header_offset: ElfOffset,
    pub cpu_flags: ElfWord,
@@ -345,6 +345,11 @@ pub fn get_all_section_headers(
    Ok(headers)
 } 
 
+pub fn get_entry_point_offset(elf_header: &ElfHeader)->usize{
+   let offset = to_native_endianness_32b(elf_header, &elf_header._entry_point);
+   offset as usize
+}
+
 pub fn get_local_symbols(
    reader: &mut BufReader<File>,
    elf_header: &ElfHeader,
@@ -394,6 +399,16 @@ pub fn get_local_symbols(
 
    assert!(local_symbols.is_empty() == false);
    Ok(local_symbols)
+}
+
+pub fn get_dot_text_symbol(
+   reader: &mut BufReader<File>,
+   elf_header: &ElfHeader,
+   sect_hdrs: &Vec<SectionHeader>,
+   symtable_hdr: &SectionHeader,
+)->Option<SymbolTableEntry>{
+
+   None
 }
 
 pub fn get_text_section_symbols<'a>(

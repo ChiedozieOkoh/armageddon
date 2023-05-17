@@ -3,13 +3,12 @@ use std::collections::HashMap;
 use crate::asm::decode::{Opcode,B16};
 use super::{decode_operands::{get_operands, pretty_print, get_operands_32b}, decode::{instruction_size, InstructionSize}};
 
-//TODO get text section symbol offset, use that to recognise symbols by relative byte offset.
-pub fn print_assembly(bytes: &[u8], text_symbol_map: &HashMap<usize, String>){
+pub fn print_assembly(bytes: &[u8],entry_point: usize, text_symbol_map: &HashMap<usize, String>){
    let src_code = disassemble(
       bytes,
       |byte_offset,code,encoded_16b|{
          let maybe_args = get_operands(&code, encoded_16b);
-         let maybe_label = text_symbol_map.get(&byte_offset);
+         let maybe_label = text_symbol_map.get(&(entry_point + byte_offset));
          let mut line = String::new();
          if let Some(label) = maybe_label{
             line.push_str("<");
@@ -32,7 +31,7 @@ pub fn print_assembly(bytes: &[u8], text_symbol_map: &HashMap<usize, String>){
       |byte_offset,code,encoded_32b|{
          let maybe_args = get_operands_32b(&code, encoded_32b);
          let mut line = String::new();
-         let maybe_label = text_symbol_map.get(&byte_offset);
+         let maybe_label = text_symbol_map.get(&(entry_point + byte_offset ));
          if let Some(label) = maybe_label{
             line.push_str("<");
             line.push_str(label);

@@ -15,7 +15,7 @@ use std::io::Write;
 use elf::decoder::ElfError;
 
 use crate::asm::interpreter::print_assembly;
-use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_local_symbols, get_text_section_symbols, get_matching_symbol_names, remove_assembler_artifact_symbols, build_symbol_byte_offset_map};
+use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_local_symbols, get_text_section_symbols, get_matching_symbol_names, remove_assembler_artifact_symbols, build_symbol_byte_offset_map, get_entry_point_offset};
 fn main() {
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{
@@ -27,8 +27,9 @@ fn main() {
    let maybe_file = Path::new(&args[1]);
    let maybe_instructions  = load_instruction_opcodes(maybe_file);
    exit_on_err(&maybe_instructions);
-   let (instructions, symbol_map) = maybe_instructions.unwrap();
-   print_assembly(&instructions[..],&symbol_map);
+
+   let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
+   print_assembly(&instructions[..],entry_point, &symbol_map);
 }
 
 /*fn assemble(path: &Path, asm: &[u8])->Result<Vec<u8>,ElfError>{
@@ -36,7 +37,7 @@ fn main() {
    let elf = asm_file_to_elf(path)?;
    load_instruction_opcodes(&elf)
 }*/
-
+/*
 fn write_asm(path: &Path, data: &[u8])->Result<File,std::io::Error>{
    dbg_ln!("writing  asm to {:?}",path);
    let mut file = File::create(path)?;
@@ -63,8 +64,9 @@ fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
    dbg_ln!("=======\n{:?}\n=======",std::str::from_utf8(&cmd.stderr[..]).unwrap());
    Ok(ret)
 }
+*/
 
-fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, HashMap<usize, String>),ElfError>{
+fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, HashMap<usize, String>),ElfError>{
    use crate::elf::decoder::{
       SectionHeader,
       get_header,
@@ -100,8 +102,9 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, HashMap<usize, String
    let mut names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
    remove_assembler_artifact_symbols(&mut names, &mut sym_entries);
    let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);
+   let entry_point = get_entry_point_offset(&elf_header);
 
-   Ok((text_section, text_sect_offset_map))
+   Ok((text_section, entry_point, text_sect_offset_map))
 }
 
 fn exit_on_err<T>(maybe_err: &Result<T,ElfError>){
