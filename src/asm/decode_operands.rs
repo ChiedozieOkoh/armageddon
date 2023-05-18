@@ -1,3 +1,4 @@
+use core::fmt;
 use std::fmt::Debug;
 
 use crate::binutils::{get_set_bits, signed_bitfield,umax,smin,smax};
@@ -55,7 +56,75 @@ pub enum Operands{
    Nibble(Literal<4>)
 }
 
+impl fmt::Display for Operands{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+       match self{
+          Operands::ADD_REG_SP_IMM8(r, imm8) => write!(f,"{}, {}", r, imm8),
+          Operands::INCR_SP_BY_IMM7(imm7) => write!(f,"{}",imm7),
+          Operands::INCR_SP_BY_REG(r) => write!(f,"{}",r),
+          Operands::ADR(r, imm8) => write!(f,"{}, {}", r, imm8),
+          Operands::ASRS_Imm5(d, r, imm5) => write!(f,"{}, {}, {}", d, r, imm5),
+          Operands::COND_BRANCH(off) => write!(f,".{}",off),
+          Operands::B_ALWAYS(off) => write!(f,".{}",off),
+          Operands::BREAKPOINT(imm8) => write!(f,"{}",imm8),
+          Operands::BR_LNK(off) => write!(f,".{}",off),
+          Operands::BR_LNK_EXCHANGE(r) => write!(f,"{}",r),
+          Operands::BR_EXCHANGE(r) => write!(f,"{}",r),
+          Operands::CMP_Imm8(r, imm8) => write!(f,"{}, {}",r, imm8),
+          Operands::LDR_Imm5(d, s, imm5) => write!(f,"{}, [{}, {}]", d, s, imm5),
+          Operands::LDR_Imm8(d, imm8) => write!(f,"{}, [SP, {}]",d, imm8),
+          Operands::LDR_REG(d, s, r) => write!(f,"{}, [{}, {}]",d, s, r),
+          Operands::LS_Imm5(d, s, imm5) => write!(f,"{}, {}, {}", d, s, imm5),
+          Operands::MOV_REG(d, s) => write!(f,"{}, {}", d, s),
+          Operands::DestImm8(d, imm8) => write!(f,"{}, {}", d, imm8),
+          Operands::LoadableList(base, list) => {
+             let registers = get_set_bits(*list);
+             let mut list_str = String::new();
+             if (1 << base.0) & list > 0 {
+                list_str.push_str(&format!("r{},",base.0));
+             }else{
+                list_str.push_str(&format!("r{}!,",base.0));
+             }
+             list_str.push_str(&fmt_register_list(registers));
+             write!(f, "{}", list_str)
+          },
+          Operands::RegisterPair(d, r) => write!(f, "{}, {}", d, r),
+          Operands::RegPairImm3(d, s, imm3) => write!(f, "{}, {}, {}", d, s, imm3),
+          Operands::RegisterTriplet(d, s, a) => write!(f, "{}, {}, {}", d, s, a),
+          Operands::PureRegisterPair(a, b) => write!(f, "{}, {}", a, b),
+          Operands::RegisterList(list) => {
+             let registers = get_set_bits(*list);
+             write!(f,"{}",fmt_register_list(registers))
+          },
+          Operands::STR_Imm5(s, base, imm5) => write!(f, "{}, {}, {}", s, base, imm5),
+          Operands::STR_Imm8(s, imm8) => write!(f, "{}, [SP, {}]", s, imm8),
+          Operands::STR_REG(s, base, offset_reg) => write!(f, "{}, [{}, {}]", s, base, offset_reg),
+          Operands::SP_SUB(imm7) => write!(f, "SP, SP, {}", imm7),
+          Operands::Byte(imm8) => write!(f, "{}", imm8),
+          Operands::HalfWord(imm16) => write!(f, "{}", imm16),
+          Operands::EnableInterupt(flag) => {
+             if *flag{
+                write!(f, "CPSIE i")
+             }else{
+                write!(f, "CPSID i")
+             }
+          },
+          Operands::MSR(meta, src) => write!(f, "{:?}, {}", meta, src),
+          Operands::MRS(src, meta) => write!(f, "{}, {:?}", src, meta),
+          Operands::Nibble(imm4) => write!(f, "{}", imm4),
+       }
+    }
+}
+
 pub fn pretty_print(operands: &Operands)->String{
+   if cfg!(debug_assertions){
+      dbg_print(operands)
+   }else{
+      format!("{}", operands)
+   }
+}
+
+fn dbg_print(operands: &Operands)->String{
    match operands{
       Operands::LoadableList(base_register,register_list) => {
          let registers = get_set_bits(*register_list);
@@ -87,6 +156,7 @@ pub fn pretty_print(operands: &Operands)->String{
          remove_everything_outside_brackets(&dbg_operands)
       }
    }
+
 }
 
 fn fmt_register_list(registers: Vec<u8>)->String{
