@@ -9,6 +9,9 @@ pub type HalfWord = [u8;2];
 pub type Word = [u8;4];
 //---
 
+pub const STACK_POINTER: u8 = 13;
+pub const PROGRAM_COUNTER: u8 = 15;
+
 #[derive(PartialEq)]
 pub struct Register(pub u8);
 impl From<u8> for Register{
@@ -23,15 +26,15 @@ impl From<u32> for Register{
    }
 }
 
-impl fmt::Display for Register{
+impl fmt::Debug for Register{
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       write!(f,"r{}",self.0)
    }
 }
 
-impl fmt::Debug for Register{
+impl fmt::Display for Register{
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-      write!(f,"r{}",self.0)
+      format_register(f, self.0)
    }
 }
 
@@ -57,7 +60,7 @@ impl fmt::Debug for SrcRegister{
 
 impl fmt::Display for SrcRegister{
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-      write!(f,"r{}",self.0)
+      format_register(f, self.0)
    }
 }
 
@@ -83,9 +86,19 @@ impl fmt::Debug for DestRegister{
 
 impl fmt::Display for DestRegister{
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-      write!(f,"r{}",self.0)
+      format_register(f, self.0)
    }
 }
+fn format_register(f: &mut fmt::Formatter<'_>, number: u8) -> fmt::Result{
+   match number{
+      0 ..=12 => {write!(f,"r{}",number)},
+      13 => write!(f,"SP"),
+      14 => write!(f,"LR"),
+      15 => write!(f,"PC"),
+      _ => unreachable!()
+   }
+}
+
 use crate::{binutils::BitField, system::SysErr};
 
 pub type Literal<const L: u32> = BitField<L>;

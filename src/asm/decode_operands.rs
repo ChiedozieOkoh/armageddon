@@ -11,7 +11,7 @@ use super::{
    Literal,
    Register,
    SrcRegister,
-   Word
+   Word, STACK_POINTER, PROGRAM_COUNTER
 };
 
 use crate::asm::decode::{Opcode,B16,B32};
@@ -33,7 +33,7 @@ pub enum Operands{
    BR_EXCHANGE(Register),
    CMP_Imm8(Register,Literal<8>),
    LDR_Imm5(DestRegister,SrcRegister,Literal<5>),
-   LDR_Imm8(DestRegister,Literal<8>),
+   LDR_Imm8(DestRegister,SrcRegister,Literal<8>),
    LDR_REG(DestRegister,SrcRegister,Register),
    LS_Imm5(DestRegister,SrcRegister,Literal<5>),
    MOV_REG(DestRegister,SrcRegister),
@@ -56,12 +56,13 @@ pub enum Operands{
    Nibble(Literal<4>)
 }
 
+//TODO dont hardcode special register names
 impl fmt::Display for Operands{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
        match self{
-          Operands::ADD_REG_SP_IMM8(r, imm8) => write!(f,"{}, {}", r, imm8),
-          Operands::INCR_SP_BY_IMM7(imm7) => write!(f,"{}",imm7),
-          Operands::INCR_SP_BY_REG(r) => write!(f,"{}",r),
+          Operands::ADD_REG_SP_IMM8(r, imm8) => write!(f,"{}, SP, {}", r, imm8),
+          Operands::INCR_SP_BY_IMM7(imm7) => write!(f,"SP, {}",imm7),
+          Operands::INCR_SP_BY_REG(r) => write!(f,"SP, {}",r),
           Operands::ADR(r, imm8) => write!(f,"{}, {}", r, imm8),
           Operands::ASRS_Imm5(d, r, imm5) => write!(f,"{}, {}, {}", d, r, imm5),
           Operands::COND_BRANCH(off) => write!(f,".{}",off),
@@ -72,7 +73,7 @@ impl fmt::Display for Operands{
           Operands::BR_EXCHANGE(r) => write!(f,"{}",r),
           Operands::CMP_Imm8(r, imm8) => write!(f,"{}, {}",r, imm8),
           Operands::LDR_Imm5(d, s, imm5) => write!(f,"{}, [{}, {}]", d, s, imm5),
-          Operands::LDR_Imm8(d, imm8) => write!(f,"{}, [SP, {}]",d, imm8),
+          Operands::LDR_Imm8(d,s,imm8) => write!(f,"{}, [{}, {}]",d,s, imm8),
           Operands::LDR_REG(d, s, r) => write!(f,"{}, [{}, {}]",d, s, r),
           Operands::LS_Imm5(d, s, imm5) => write!(f,"{}, {}, {}", d, s, imm5),
           Operands::MOV_REG(d, s) => write!(f,"{}, {}", d, s),
@@ -96,7 +97,7 @@ impl fmt::Display for Operands{
              let registers = get_set_bits(*list);
              write!(f,"{}",fmt_register_list(registers))
           },
-          Operands::STR_Imm5(s, base, imm5) => write!(f, "{}, {}, {}", s, base, imm5),
+          Operands::STR_Imm5(s, base, imm5) => write!(f, "{}, [{}, {}]", s, base, imm5),
           Operands::STR_Imm8(s, imm8) => write!(f, "{}, [SP, {}]", s, imm8),
           Operands::STR_REG(s, base, offset_reg) => write!(f, "{}, [{}, {}]", s, base, offset_reg),
           Operands::SP_SUB(imm7) => write!(f, "SP, SP, {}", imm7),
@@ -125,6 +126,7 @@ pub fn pretty_print(operands: &Operands)->String{
 }
 
 fn dbg_print(operands: &Operands)->String{
+   println!("{:?}\n\n", operands);
    match operands{
       Operands::LoadableList(base_register,register_list) => {
          let registers = get_set_bits(*register_list);
@@ -140,8 +142,8 @@ fn dbg_print(operands: &Operands)->String{
       Operands::LDR_Imm5(dest,base ,imm5) => {
          format!("{},[{},{}]",dest,base,imm5)
       },
-      Operands::LDR_Imm8(dest,imm8) => {
-         format!("{},[SP,{}]",dest,imm8)
+      Operands::LDR_Imm8(dest,src, imm8) => {
+         format!("{},[{},{}]",dest,src,imm8)
       },
       Operands::LDR_REG(dest,src,offset) => {
          format!("{},[{},{}]",dest,src,offset)
@@ -229,13 +231,13 @@ pub fn get_operands(code: &Opcode, hw: &HalfWord)-> Option<Operands>{
             B16::CPS => Some(get_cps_operands(hw)),
             B16::XOR_REG => Some(get_def_reg_pair_as_operands(hw)),
             B16::LDM => Some(get_load_list_operands(hw)),
-            B16::LDR_Imm5 => Some(get_ldr_imm5_operands(hw)),
+            B16::LDR_Imm5 => Some(get_ldr_imm5_operands(hw,4)),
             B16::LDR_SP_Imm8 => Some(get_ldr_imm8_operands(hw)),
             B16::LDR_PC_Imm8 => Some(get_ldr_imm8_operands(hw)),
             B16::LDR_REGS => Some(get_ldr_reg_operands(hw)),
-            B16::LDRB_Imm5 => Some(get_ldr_imm5_operands(hw)),
+            B16::LDRB_Imm5 => Some(get_ldr_imm5_operands(hw,1)),
             B16::LDRB_REGS => Some(get_ldr_reg_operands(hw)),
-            B16::LDRH_Imm5 => Some(get_ldr_imm5_operands(hw)),
+            B16::LDRH_Imm5 => Some(get_ldr_imm5_operands(hw,2)),
             B16::LDRH_REGS => Some(get_ldr_reg_operands(hw)),
             B16::LDRSB_REGS => Some(get_ldr_reg_operands(hw)),
             B16::LDRSH_REGS => Some(get_ldr_reg_operands(hw)),
@@ -513,14 +515,21 @@ fn get_dest_src_and_imm5(hw: &HalfWord)->(DestRegister,SrcRegister,Literal<5>){
 }
 
 
-fn get_ldr_imm5_operands(hw: &HalfWord)->Operands{
+fn get_ldr_imm5_operands(hw: &HalfWord, multiple: u8)->Operands{
    let (dest,base,imm5) = get_dest_src_and_imm5(hw);
-   Operands::LDR_Imm5(dest,base,imm5)
+   let adjusted: Literal<5> = (imm5.0 * multiple as u32).into();
+   Operands::LDR_Imm5(dest,base,adjusted)
 }
 
 fn get_ldr_imm8_operands(hw: &HalfWord)->Operands{
    let (dest,imm8) = offset_addressing_imm8(hw);
-   Operands::LDR_Imm8(dest.into(), imm8)
+   let src = if hw[1] & 0xF8 == 0x98{
+      SrcRegister(STACK_POINTER)
+   }else{
+      SrcRegister(PROGRAM_COUNTER)
+   };
+   let adjusted: Literal<8> = (imm8.0 * 4 as u32).into();
+   Operands::LDR_Imm8(dest.into(), src, adjusted)
 }
 
 fn get_ldr_reg_operands(hw: &HalfWord)->Operands{

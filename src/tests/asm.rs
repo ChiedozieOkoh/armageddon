@@ -5,7 +5,7 @@ use crate::asm::decode_operands::{
 };
 
 use crate::elf::decoder::ElfError;
-use crate::asm::HalfWord;
+use crate::asm::{HalfWord, STACK_POINTER, PROGRAM_COUNTER};
 use crate::system::registers::SpecialRegister;
 use std::path::{Path, PathBuf};
 use std::fs::File;
@@ -853,19 +853,19 @@ fn should_recognise_ldr()->Result<(),std::io::Error>{
    let code_reg = (&reg_b).into();
 
    if let Some(Operands::LDR_Imm5(dest,base, offset)) = get_operands(&Opcode::_16Bit(B16::LDR_Imm5), &imm5_b){
-      assert_eq!((dest.0,base.0,offset.0),(0,1,20/4));
+      assert_eq!((dest.0,base.0,offset.0),(0,1,20));
    }else{
       panic!("could not parse ldr operands");
    }
 
-   if let Some(Operands::LDR_Imm8(dest, offset)) = get_operands(&Opcode::_16Bit(B16::LDR_SP_Imm8), &imm8_b){
-      assert_eq!((dest.0,offset.0),(4,124/4));
+   if let Some(Operands::LDR_Imm8(dest,src ,offset)) = get_operands(&Opcode::_16Bit(B16::LDR_SP_Imm8), &imm8_b){
+      assert_eq!((dest.0,src.0,offset.0),(4,STACK_POINTER,124));
    }else{
       panic!("could not parse ldr operands");
    }
 
-   if let Some(Operands::LDR_Imm8(dest, offset)) = get_operands(&Opcode::_16Bit(B16::LDR_PC_Imm8), &pc_imm8_alt_b){
-      assert_eq!((dest.0,offset.0),(6,16/4));
+   if let Some(Operands::LDR_Imm8(dest,src,offset)) = get_operands(&Opcode::_16Bit(B16::LDR_PC_Imm8), &pc_imm8_alt_b){
+      assert_eq!((dest.0,src.0,offset.0),(6,PROGRAM_COUNTER,16));
    }else{
       panic!("could not parse ldr operands");
    }
@@ -937,7 +937,7 @@ fn should_recognise_ldrh()->Result<(),std::io::Error>{
    let regs: Opcode = (&reg_b).into();
 
    if let Some(Operands::LDR_Imm5(dest,base, offset)) = get_operands(&Opcode::_16Bit(B16::LDRH_Imm5), &imm5_b){
-      assert_eq!((dest.0,base.0,offset.0),(0,1,58/2));
+      assert_eq!((dest.0,base.0,offset.0),(0,1,58));
    }else{
       panic!("could not parse ldrh operands");
    }

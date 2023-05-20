@@ -401,16 +401,6 @@ pub fn get_local_symbols(
    Ok(local_symbols)
 }
 
-pub fn get_dot_text_symbol(
-   reader: &mut BufReader<File>,
-   elf_header: &ElfHeader,
-   sect_hdrs: &Vec<SectionHeader>,
-   symtable_hdr: &SectionHeader,
-)->Option<SymbolTableEntry>{
-
-   None
-}
-
 pub fn get_text_section_symbols<'a>(
    elf_header: &ElfHeader,
    sect_hdrs: &Vec<SectionHeader>,
