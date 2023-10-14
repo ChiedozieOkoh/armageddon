@@ -1,0 +1,25 @@
+define register_trace
+   set $asm_fn_line = LINE
+   display $r0
+   display $r1
+   display $r2
+   display $r3
+   display $sp
+   display $pc
+   display $lr
+   display $xPSR
+   echo <<STARTING_PROC_LOG>>\n
+   continue
+   while($asm_fn_line > 0)
+      stepi
+      echo <<-->>\n
+      set $asm_fn_line = $asm_fn_line - 1
+   end
+end
+
+target remote :3333
+monitor reset init
+break test_start 
+load
+register_trace
+echo <<FINISHED_PROC_LOG>>\n

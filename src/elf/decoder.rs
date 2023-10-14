@@ -408,6 +408,7 @@ pub fn get_text_section_symbols<'a>(
    )->Option<Vec<&'a SymbolTableEntry>>{
 
    if let Some(i) = sect_hdrs.iter().position(|hdr| is_text_section_hdr(&elf_header, hdr)){
+      dbg_ln!("text section index is {}",i);
       Some(sym_entries.iter()
            .filter(|sym| to_native_endianness_16b(&elf_header, &sym.header_index) == (i as u16))
            .collect()
@@ -445,16 +446,6 @@ pub fn get_matching_symbol_names(
    return Ok(symbol_names);
 }
 
-pub fn remove_assembler_artifact_symbols(
-   names: &mut Vec<String>,
-   sym_entries: &mut Vec<SymbolTableEntry>
-){
-   if let Some(i) =  names.iter().position(|name| name.eq("$t")){
-      names.remove(i);
-      sym_entries.remove(i);
-   }
-}
-
 pub fn build_symbol_byte_offset_map(
    elf_header: &ElfHeader,
    names: Vec<String>,
@@ -462,9 +453,11 @@ pub fn build_symbol_byte_offset_map(
 )->HashMap<usize, String>{
    let mut offset_map = HashMap::new();
    for (i, name) in names.into_iter().enumerate(){
-      let symbol = &sym_entries[i];
-      let offset: u32 = to_native_endianness_32b(&elf_header, &symbol.value);
-      offset_map.insert(offset as usize, name);
+      if name.ne("$d") && name.ne("$t"){
+         let symbol = &sym_entries[i];
+         let offset: u32 = to_native_endianness_32b(&elf_header, &symbol.value);
+         offset_map.insert(offset as usize, name);
+      }
    }
 
    return offset_map;

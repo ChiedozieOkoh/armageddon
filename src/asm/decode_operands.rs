@@ -125,6 +125,16 @@ pub fn pretty_print(operands: &Operands)->String{
    }
 }
 
+//TODO  finish whatever this thing was
+/*pub fn has_symbol_operation(operands: &Operands)->bool{
+   match operands{
+      Operands::LDR_Imm8(_, base, offset)=>{
+         base.0 == PROGRAM_COUNTER
+      },
+      Operand::
+   }
+}*/
+
 fn dbg_print(operands: &Operands)->String{
    println!("{:?}\n\n", operands);
    match operands{

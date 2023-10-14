@@ -19,12 +19,21 @@ pub enum SpecialRegister{
 
 pub struct Registers{
    pub generic: [u32;13], //R0 -> R12
-   special: [u32;3] //have restrictions on how they can used
+   sp_main: u32,
+   sp_process: u32,
+   lr: u32,
+   pc: u32
 }
 
 impl Registers{
    pub fn create()->Self{
-      Self{generic: [0;13],special: [0;3]}
+      Self{
+         generic: [0;13],
+         sp_main: 0,
+         sp_process: 0,
+         lr: 0,
+         pc: 0
+      }
    }
 }
 
