@@ -1,3 +1,5 @@
+use std::num::Wrapping;
+
 use crate::dbg_ln;
 
 #[inline]
@@ -27,6 +29,10 @@ pub fn u32_to_arm_bytes(v: u32)-> [u8;4]{
 #[inline]
 pub fn from_arm_bytes(word: [u8;4])-> u32{
    u32::from_le_bytes(word)
+}
+
+pub fn into_arm_bytes(word: u32)->[u8;4]{
+   u32::to_le_bytes(word)
 }
 
 #[inline]
@@ -120,8 +126,11 @@ pub fn signed_bitfield<const L: u32>(a: BitField<L>)->i32{
       dbg_ln!("ret={}",a.0);
       a.0 as i32
    }else{
-      dbg_ln!("ret=({} - {})",a.0 as i32,1<<L);
-      a.0 as i32  - (1<<L)
+      let masked: Wrapping<u32> = Wrapping((a.0 & !(1<<(L-1))));
+      let sign_off: Wrapping<u32> = Wrapping(1 << (L-1));
+      println!("ub {} - ub {} = {}",masked,sign_off,Wrapping(masked-sign_off));
+      println!();
+      (Wrapping((a.0 & !(1<<(L-1))) as i32)  - Wrapping(1<<(L-1))).0
    }
 }
 

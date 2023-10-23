@@ -1,4 +1,4 @@
-use crate::binutils::{get_bitfield,get_set_bits,smax,smin,umax};
+use crate::binutils::{get_bitfield,get_set_bits,smax,smin,umax, signed_bitfield, BitField};
 #[test]
 fn should_get_bitfield(){
    let xmpl_1 = get_bitfield::<4>(0x0F00,8);
@@ -17,6 +17,14 @@ fn bitfields_bounds_are_correct(){
    assert_eq!(3,smax::<3>());
    assert_eq!(-4,smin::<3>());
    assert_eq!(7,umax::<3>());
+}
+
+#[test]
+fn convert_to_signed_int_correctly(){
+   let a: BitField<3> = (0x4_u32).into();
+   let b: BitField<3> = (0x2_u32).into();
+   assert_eq!(signed_bitfield(a), -4);
+   assert_eq!(signed_bitfield(b), 2);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::asm::decode::{Opcode,B16};
+use crate::{asm::decode::{Opcode,B16}, system::{System, load_memory, write_memory}};
 use super::{decode_operands::{get_operands, pretty_print, get_operands_32b}, decode::{instruction_size, InstructionSize}};
 
 pub fn print_assembly(bytes: &[u8],entry_point: usize, text_symbol_map: &HashMap<usize, String>){
@@ -50,6 +50,13 @@ pub fn print_assembly(bytes: &[u8],entry_point: usize, text_symbol_map: &HashMap
    for line in src_code{
       println!("{}",line);
    }
+}
+
+use crate::system::TRACED_VARIABLES;
+pub fn interpret_with_trace(sys: &mut System, code: &[u8],entry_point: usize)->Vec<[u32;TRACED_VARIABLES]>{
+   let mut states = Vec::new();
+   let instruction: &[u8;2] = code[entry_point..entry_point + 1].try_into().unwrap();
+   return states;
 }
 
 fn disassemble<

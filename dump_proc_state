@@ -1,5 +1,6 @@
 define register_trace
    set $asm_fn_line = LINE
+   echo <<STARTING_PROC_LOG>>\n
    display $r0
    display $r1
    display $r2
@@ -8,8 +9,8 @@ define register_trace
    display $pc
    display $lr
    display $xPSR
-   echo <<STARTING_PROC_LOG>>\n
    continue
+   echo <<-->>\n
    while($asm_fn_line > 0)
       stepi
       echo <<-->>\n

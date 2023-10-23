@@ -118,7 +118,7 @@ fn to_native_endianness_16b(header: &ElfHeader, bytes: &[u8;2])->u16{
    }
 }
 
-fn to_native_endianness_32b(header: &ElfHeader, bytes: &[u8;4])->u32{
+pub fn to_native_endianness_32b(header: &ElfHeader, bytes: &[u8;4])->u32{
    match header.get_elf_endianess(){
       EIData::_None => panic!("cannot read with unknown endianness"),
       EIData::Lsb => u32::from_le_bytes(*bytes),

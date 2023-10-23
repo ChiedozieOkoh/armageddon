@@ -277,6 +277,16 @@ pub enum InstructionSize{
    B32
 }
 
+impl InstructionSize{
+   #[inline]
+   pub fn in_bytes(self)->u32{
+      match self{
+        InstructionSize::B16 => 2,
+        InstructionSize::B32 => 4,
+    }
+   }
+}
+
 #[inline]
 pub fn instruction_size(opcode: &[u8;2])->InstructionSize{
    let header = opcode[1] & 0xF8;

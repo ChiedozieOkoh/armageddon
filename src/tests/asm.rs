@@ -38,7 +38,7 @@ fn load_instruction_opcodes(file: &Path)->Result<Vec<u8>,ElfError>{
    Ok(text_section)
 }
 
-fn write_asm(path: &Path, data: &[u8])->Result<File,std::io::Error>{
+pub fn write_asm(path: &Path, data: &[u8])->Result<File,std::io::Error>{
    println!("writing  asm to {:?}",path);
    let mut file = File::create(path)?;
    file.write_all(data)?;
@@ -46,7 +46,7 @@ fn write_asm(path: &Path, data: &[u8])->Result<File,std::io::Error>{
    Ok(file)
 }
 
-fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
+pub fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
    use std::process::Command;
    let mut fname = String::new();
    fname.push_str(path.to_str().unwrap());
@@ -85,7 +85,7 @@ fn asm_file_to_elf_armv6(path: &Path)->Result<PathBuf,std::io::Error>{
    Ok(ret)
 }
 
-fn asm_file_to_elf_armv6t2(path: &Path)->Result<PathBuf,std::io::Error>{
+pub fn asm_file_to_elf_armv6t2(path: &Path)->Result<PathBuf,std::io::Error>{
    println!("forcing T2 encoding");
    use std::process::Command;
    let mut fname = String::new();
