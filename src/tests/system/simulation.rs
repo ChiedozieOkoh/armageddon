@@ -3,6 +3,7 @@ use std::any::Any;
 use std::io::{Error,ErrorKind};
 use std::path::Path;
 
+use crate::binutils::from_arm_bytes;
 use crate::system::instructions::{zero_flag, negative_flag, carry_flag, overflow_flag};
 use crate::tests::asm::{write_asm, asm_file_to_elf};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
@@ -254,49 +255,77 @@ fn run_euclid(r0_value: u32, r1_value: u32)->Result<(u32,u32), std::io::Error>{
             let incr = sys.step()?;
             sys.offset_pc(incr)?;
          }
-
-         
-            //let incr = sys.step()?;
-            //sys.offset_pc(incr)?;
-
-            //let incr = sys.step()?;
-            //sys.offset_pc(incr)?;
-
-            //let incr = sys.step()?;
-            //sys.offset_pc(incr)?;
-
-            //let incr = sys.step()?;
-            //sys.offset_pc(incr)?;
-
-            //let incr = sys.step()?;
-            //sys.offset_pc(incr)?;
-
-            //let incr = sys.step()?;
-            //sys.offset_pc(incr)?;
-
-            //let incr = sys.step()?;
-            //sys.offset_pc(incr)?;
          return Ok((sys.registers.generic[0], sys.registers.generic[1]));
       }
    )?;
 
    return Ok(res);
 }
-/*
+
+#[test]
 pub fn should_load()->Result<(),std::io::Error>{
    let code = 
    b".thumb
    .text
-      LDR r0, _some_var 
-   .data
+      LDR r0, =_some_var 
+      NOP
+      NOP
+      NOP
       _some_var: .word 0xBEEF
    ";
    run_assembly(
       &Path::new("sim_load.s"),
       code,
-      interpreter
-   );
-}*/
+      |entry_point, binary|{
+         let mut sys = load_code_into_system(entry_point, binary)?;
+         println!("mem: [{:?}]",sys.memory);
+         sys.step()?;
+         let beef_ptr = sys.registers.generic[0]; 
+
+         let word: [u8;4] = sys.memory[beef_ptr as usize .. beef_ptr as usize + 4]
+            .try_into()
+            .unwrap();
+         assert_eq!(0xBEEF_u32,from_arm_bytes(word));
+         return Ok(());
+      }
+   )?;
+   return Ok(());
+}
+
+#[test]
+pub fn should_store()->Result<(), std::io::Error>{
+   let code = 
+      b".thumb
+      .text
+         LDR r0, =_some_var
+         MOV r1, #240
+         STR r1, [r0, #0]
+         NOP
+         _some_var: .word 0xCCCC
+   ";
+
+   run_assembly(
+      Path::new("sim_store.s"),
+      code,
+      |entry_point, binary|{
+         let mut sys = load_code_into_system(entry_point, binary)?;
+         let mut i = sys.step()?;
+         let ptr = sys.registers.generic[0] as usize;
+         sys.offset_pc(i)?;
+         i = sys.step()?;
+         sys.offset_pc(i)?;
+         i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let written_word: [u8;4] = sys.memory[ptr .. ptr + 4].try_into().unwrap();
+         assert_eq!(240, from_arm_bytes(written_word));
+
+         return Ok(());
+      }
+   )?;
+
+   return Ok(());
+}
 
 #[test] #[ignore] 
 pub fn hardware_linear_search(){

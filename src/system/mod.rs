@@ -84,12 +84,8 @@ impl System{
       return Ok(());
    }
 
-   pub fn get_pc(&self)->u32{
-      return (self.registers.pc + 4) as u32;
-   }
-
    pub fn read_pc_word_aligned(&self)->u32{
-      return ((self.registers.pc + 4) as u32 ) & 0xFFFFFF00;
+      return ((self.registers.pc + 4) as u32 ) & 0xFFFFFFFC;
    }
 
    pub fn offset_pc(&mut self, offset: i32 )->Result<(),SysErr>{
@@ -115,7 +111,7 @@ impl System{
    }
 
    pub fn step(&mut self)->Result<i32, SysErr>{
-      let maybe_code: &[u8;2] = load_memory::<2>(&self, self.registers.pc as u32)?;
+      let maybe_code: [u8;2] = load_memory::<2>(&self, self.registers.pc as u32)?;
       let instr_size = instruction_size(maybe_code);
       match instr_size{
          InstructionSize::B16 => {
@@ -366,8 +362,8 @@ impl System{
                   );
 
                   let addr = self.registers.generic[base.0 as usize] + self.registers.generic[offset.0 as usize];
-                  let value: &[u8;4] = load_memory::<4>(&self, addr)?;
-                  self.registers.generic[dest.0 as usize] = from_arm_bytes(*value);
+                  let value: [u8;4] = load_memory::<4>(&self, addr)?;
+                  self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -381,14 +377,30 @@ impl System{
                   assert_eq!(src.0,15);
                   let addr = Self::offset_read_pc(self.read_pc_word_aligned(), offset.0 as i32)?;
                   let value = load_memory(&self, addr)?;
-                  self.registers.generic[dest.0 as usize] = from_arm_bytes(*value);
+                  self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STR_Imm5) => {
+                  let (v_reg,base,offset) = unpack_operands!(
+                     get_operands(&code, maybe_code),
+                     Operands::STR_Imm5,
+                     a,b,i
+                  );
+
+                  let base_v = self.registers.generic[base.0 as usize];
+                  let addr = base_v + offset.0;
+                  let val = self.registers.generic[v_reg.0 as usize];
+
+                  write_memory::<4>(self, addr, into_arm_bytes(val))?;
                   return Ok(instr_size.in_bytes() as i32);
                }
+
                _ => unreachable!()
             } 
          },
          InstructionSize::B32 => {
-            let word: &[u8;4] = load_memory::<4>(&self, self.registers.pc as u32)?;
+            let word: [u8;4] = load_memory::<4>(&self, self.registers.pc as u32)?;
             let _instr_32b = Opcode::from(word);
             todo!();
          }
@@ -439,6 +451,19 @@ fn is_system_in_le_mode(_sys: &System)-> bool{
    return true;
 }
 
+
+pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],SysErr>{
+   if !is_aligned(v_addr, T as u32){
+      return Err(SysErr::HardFault);
+   }
+
+   let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
+      .try_into()
+      .expect("should not access out of bounds memory");
+   return Ok(mem)
+}
+
+/*
 pub fn load_memory<'a, const T: usize>(sys: &'a System, v_addr: u32)->Result<&'a [u8;T],SysErr>{
    if !is_aligned(v_addr, T as u32){
       return Err(SysErr::HardFault);
@@ -449,9 +474,10 @@ pub fn load_memory<'a, const T: usize>(sys: &'a System, v_addr: u32)->Result<&'a
       .expect("should not access out of bounds memory");
    return Ok(mem)
 }
-
+*/
 pub fn write_memory<const T: usize>(sys: &mut System, v_addr: u32, value: [u8;T])->Result<(), SysErr>{
    if !is_aligned(v_addr, T as u32){
+      println!("{} is not correctly aligned for {}byte access",v_addr, T);
       return Err(SysErr::HardFault);
    }
 

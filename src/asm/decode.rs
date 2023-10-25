@@ -236,8 +236,8 @@ impl fmt::Display for Opcode{
    }
 }
 
-impl From<&HalfWord> for Opcode{
-   fn from(hw: &HalfWord)->Self{
+impl From<HalfWord> for Opcode{
+   fn from(hw: HalfWord)->Self{
       let code = match hw{
          [0x00,0xBF] => Some(Opcode::_16Bit(B16::NOP)),
          [0x40,0xBF] => Some(Opcode::_16Bit(B16::SEV)),
@@ -288,7 +288,7 @@ impl InstructionSize{
 }
 
 #[inline]
-pub fn instruction_size(opcode: &[u8;2])->InstructionSize{
+pub fn instruction_size(opcode: [u8;2])->InstructionSize{
    let header = opcode[1] & 0xF8;
    match header{
       0xE8 | 0xF0 | 0xF8 => InstructionSize::B32,
@@ -297,8 +297,8 @@ pub fn instruction_size(opcode: &[u8;2])->InstructionSize{
 }
 
 #[inline]
-fn data_proccess(hw: &HalfWord)->Opcode{
-   let native = from_arm_bytes_16b(*hw);
+fn data_proccess(hw: HalfWord)->Opcode{
+   let native = from_arm_bytes_16b(hw);
    let code = (0x03C0 & native) >> 6;
    match code{
       0 => Opcode::_16Bit(B16::ANDS),
@@ -321,8 +321,8 @@ fn data_proccess(hw: &HalfWord)->Opcode{
    }
 }
 
-fn special_data(hw: &HalfWord)->Opcode{
-   let native = from_arm_bytes_16b(*hw);
+fn special_data(hw: HalfWord)->Opcode{
+   let native = from_arm_bytes_16b(hw);
    if native & 0xFF87 == 0x4487{
       return Opcode::_16Bit(B16::INCR_SP_BY_REG);
    }
@@ -349,7 +349,7 @@ fn special_data(hw: &HalfWord)->Opcode{
 }
 
 #[inline]
-fn load_store_single(hw: &HalfWord)->Opcode{
+fn load_store_single(hw: HalfWord)->Opcode{
    dbg_ln!("{:#x}",hw[1]);
    let op_a = (hw[1] & 0xF0) >> 4;
    let op_b = (hw[1] & 0x0E) >> 1;
@@ -402,8 +402,8 @@ fn load_store_single(hw: &HalfWord)->Opcode{
 }
 
 #[inline]
-fn misc(hw: &HalfWord)->Opcode{
-   let code = (from_arm_bytes_16b(*hw) & 0x0FE0) >> 5;
+fn misc(hw: HalfWord)->Opcode{
+   let code = (from_arm_bytes_16b(hw) & 0x0FE0) >> 5;
    match code{
       0 | 1 | 2 | 3 => Opcode::_16Bit(B16::INCR_SP_BY_IMM7),
       4 | 5 | 6 | 7 => Opcode::_16Bit(B16::SUB_SP_Imm7),
@@ -422,7 +422,7 @@ fn misc(hw: &HalfWord)->Opcode{
    }
 }
 
-fn cond_branch(hw: &HalfWord)->Opcode{
+fn cond_branch(hw: HalfWord)->Opcode{
    let cond = hw[1] & 0x0F;
    match cond{
       0x00 => Opcode::_16Bit(B16::BEQ),
@@ -445,11 +445,11 @@ fn cond_branch(hw: &HalfWord)->Opcode{
    }
 }
 
-fn shift_add_sub_mv_cmpr(hw: &HalfWord)->Opcode{
+fn shift_add_sub_mv_cmpr(hw: HalfWord)->Opcode{
    let code = (hw[1] & 0x3E) >> 1;
    match code{
       0 ..=3 => {
-         if from_arm_bytes_16b(*hw) & 0x01C0 == 0{
+         if from_arm_bytes_16b(hw) & 0x01C0 == 0{
             Opcode::_16Bit(B16::MOV_REGS_T2)
          }else{
             Opcode::_16Bit(B16::LSL_Imm5)
@@ -469,8 +469,8 @@ fn shift_add_sub_mv_cmpr(hw: &HalfWord)->Opcode{
    }
 }
 
-impl From<&Word> for Opcode{
-   fn from(word: &Word)->Self{
+impl From<Word> for Opcode{
+   fn from(word: Word)->Self{
       let op1 = (word[1] & 0x1C) >> 3;
       let op = (word[3] & 0xC0)>>7;
 
@@ -485,7 +485,7 @@ impl From<&Word> for Opcode{
 }
 
 #[inline]
-fn branch_and_misc(bytes: &Word)->B32{
+fn branch_and_misc(bytes: Word)->B32{
    let first_u16 = from_arm_bytes_16b([bytes[0],bytes[1]]);
    let op1 = (first_u16 & 0x07F0) >> 4;
    let op2 = (bytes[3] & 0x70) >> 4;
@@ -506,7 +506,7 @@ fn branch_and_misc(bytes: &Word)->B32{
 }
 
 #[inline]
-fn control(bytes: &Word)->B32{
+fn control(bytes: Word)->B32{
    dbg_ln!("control prefix: {:x}",bytes[2] & 0xF0);
    match bytes[2] & 0xF0{
       0x40 => B32::DSB,
@@ -520,13 +520,13 @@ pub fn decode_opcodes(bytes: &[u8])->Vec<Opcode>{
    let mut i: usize = 0;
    let mut opcodes = Vec::new();
    while i < bytes.len(){
-      let hw: &[u8;2] = &bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
+      let hw: [u8;2] = bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
       let thumb_instruction = Opcode::from(hw);
       if thumb_instruction == Opcode::_16Bit(B16::UNDEFINED){
          if i + 4 > bytes.len(){
             break;
          }
-         let word: &[u8;4] = &bytes[i..i+4].try_into().expect("should be 4byte aligned");
+         let word: [u8;4] = bytes[i..i+4].try_into().expect("should be 4byte aligned");
          let instruction_32bit = Opcode::from(word);
          opcodes.push(instruction_32bit);
          i += 4;

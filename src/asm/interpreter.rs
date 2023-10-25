@@ -61,13 +61,13 @@ pub fn interpret_with_trace(sys: &mut System, code: &[u8],entry_point: usize)->V
 
 fn disassemble<
 T,
-F: Fn(usize,Opcode,&[u8;2])->T,
-G: Fn(usize,Opcode,&[u8;4])->T
+F: Fn(usize,Opcode,[u8;2])->T,
+G: Fn(usize,Opcode,[u8;4])->T
 > (bytes: &[u8], operation_16b: F,operation_32b: G)->Vec<T>{
    let mut i: usize = 0;
    let mut result: Vec<T> = Vec::new();
    while i < bytes.len(){
-      let hw: &[u8;2] = &bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
+      let hw: [u8;2] = bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
       match instruction_size(hw){
          InstructionSize::B16 => {
             let thumb_instruction = Opcode::from(hw);
@@ -75,7 +75,7 @@ G: Fn(usize,Opcode,&[u8;4])->T
             i += 2;
          },
          InstructionSize::B32 => {
-            let word: &[u8;4] = &bytes[i..i+4].try_into().expect("should be 4byte aligned");
+            let word: [u8;4] = bytes[i..i+4].try_into().expect("should be 4byte aligned");
             let instruction_32bit = Opcode::from(word);
             result.push(operation_32b(i,instruction_32bit,word));
             i += 4;
