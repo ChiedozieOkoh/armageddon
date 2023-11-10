@@ -4,14 +4,21 @@ use crate::dbg_ln;
 
 #[inline]
 pub fn get_bit(bit: u32,word: u32)-> u32{
-   dbg_ln!("mask={:04b} & value={:04b}",(1<<bit),word);
+   //dbg_ln!("mask={:04b} & value={:04b}",(1<<bit),word);
    ((1 << bit) & word) >> bit
 }
 
 #[inline]
 pub fn clear_bit(bit: u32,word: u32)-> u32{
    let mask = !(1 << bit);
-   dbg_ln!("{:04b} & {:04b}",word,mask);
+   //dbg_ln!("{:04b} & {:04b}",word,mask);
+   word & mask
+}
+
+#[inline]
+pub fn clear_bit_64b(bit: u32, word: u64)-> u64{
+   let mask = !(1 << bit);
+   //dbg_ln!("{:04b} & {:04b}",word,mask);
    word & mask
 }
 
@@ -80,9 +87,9 @@ pub fn sign_extend<const A: u32>(x: BitField<A>)->i32{
    debug_assert!(A != 0);
    let mask = 1 << (A-1);
    if x.0 & mask > 0{
-      dbg_ln!("adding extra bits");
+      //dbg_ln!("adding extra bits");
       let extra_bits = u32::MAX - umax::<A>();
-      dbg_ln!("msk={:#x},val={:#x}\n{:#x} | {:#x} = {:#x}",extra_bits,x.0,extra_bits,x.0,extra_bits|x.0);
+      //dbg_ln!("msk={:#x},val={:#x}\n{:#x} | {:#x} = {:#x}",extra_bits,x.0,extra_bits,x.0,extra_bits|x.0);
       let extended = extra_bits | x.0;
       extended as i32
    }else{
@@ -115,21 +122,27 @@ pub fn smin<const L: u32>()->i32{
    signed_bitfield::<L>(min.into()) as i32
 }
 
-pub fn clear_extra<const L: u32>(a: BitField<L>)->BitField<L>{
-   let mask = (1 << (L-1)) | (1 << (L-1)) -1;
-   (a.0 & mask).into()
+pub fn clear_extra<const L: u32>(a: u32)->u32{
+   let mask: u32 = !(1 << (L - 1)) | ((1 << (L-1)));
+   (a & mask)
+}
+
+pub fn clear_extra_64b<const L: u32>(a: u64)->u64{
+   let mask = ((1 << (L - 1)) - 1) | ((1 << (L-1)));
+   println!("extra: {:x} & {:x}",a,mask);
+   (a & mask)
 }
 
 pub fn signed_bitfield<const L: u32>(a: BitField<L>)->i32{
-   dbg_ln!("making signed bitfield");
+   //dbg_ln!("making signed bitfield");
    if get_bit(L - 1,a.0)  == 0{
-      dbg_ln!("ret={}",a.0);
+      //dbg_ln!("ret={}",a.0);
       a.0 as i32
    }else{
       let masked: Wrapping<u32> = Wrapping((a.0 & !(1<<(L-1))));
       let sign_off: Wrapping<u32> = Wrapping(1 << (L-1));
-      println!("ub {} - ub {} = {}",masked,sign_off,Wrapping(masked-sign_off));
-      println!();
+      //println!("ub {} - ub {} = {}",masked,sign_off,Wrapping(masked-sign_off));
+      //println!();
       (Wrapping((a.0 & !(1<<(L-1))) as i32)  - Wrapping(1<<(L-1))).0
    }
 }

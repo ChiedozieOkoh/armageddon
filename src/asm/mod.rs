@@ -11,6 +11,7 @@ pub type Word = [u8;4];
 
 pub const STACK_POINTER: u8 = 13;
 pub const PROGRAM_COUNTER: u8 = 15;
+pub const LINK_REGISTER: u8 = 14;
 
 #[derive(PartialEq)]
 pub struct Register(pub u8);

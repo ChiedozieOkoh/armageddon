@@ -12,7 +12,7 @@ use crate::binutils::{
    BitField,
    clear_bit,
    get_bit,
-   signed_bitfield, from_arm_bytes
+   signed_bitfield, from_arm_bytes, clear_bit_64b
 };
 
 use crate::dbg_ln;
@@ -86,7 +86,7 @@ pub fn cond_passed(apsr: Apsr, b_cond: &Opcode)->bool{
 
 pub fn compare(a: u32, b: u32)->ConditionFlags{
    let (_, flags) = subtract(a,b);
-   dbg_ln!("{:?}",flags);
+   //dbg_ln!("{:?}",flags);
    return flags;
 }
 
@@ -100,7 +100,7 @@ pub struct ConditionFlags{
 
 pub fn subtract(a: u32, b: u32)->(u32, ConditionFlags){
    let (sum, carry, overflow) = add_with_carry::<32>(a.into(), (!b).into(), 1);
-   println!("sum == {}, zflag = {}", sum, sum == 0);
+   dbg_ln!("sum == {}, zflag = {}", sum, sum == 0);
    let negative = (sum & 0x80000000) > 0;
    let flags = ConditionFlags{carry, negative, zero: sum == 0, overflow};
    return (sum,flags);
@@ -121,19 +121,20 @@ fn left_shift_left_with_carry(a: u32,shift: u32, carry: u32)->(u32,u32){
 }
 
 pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-> (u32, bool, bool){
-   let sum: Wrapping<u32> = Wrapping(a.0) + Wrapping(b.0) + Wrapping(carry);
-   dbg_ln!("Usum= {} + {} + {} = {}",Wrapping(a.0),Wrapping(b.0),Wrapping(carry),sum);
+   let u_sum: u64 = (a.0 as u64) + (b.0 as u64) + (carry as u64);
+   dbg_ln!("Usum= {} + {} + {} = {}({3:x})",(a.0),(b.0),(carry),u_sum);
+   dbg_ln!("64sum= {} + {} + {} = {}",a.0 as u64,b.0 as u64, carry as u64,u_sum);
    let signed_sum: Wrapping<i32> = 
       Wrapping(signed_bitfield::<L>(a)) 
       + Wrapping(signed_bitfield::<L>(b)) 
       + Wrapping(carry as i32);
-   let result = if L == 32 { clear_bit(31, sum.0) }else{clear_bit(L, sum.0)};
-   dbg_ln!("Ssum = {} + {} + {}",signed_bitfield::<L>(a),signed_bitfield::<L>(b),carry);
-   dbg_ln!("signed sum={}",signed_sum);
-   let carry_out = result != sum.0;
-   dbg_ln!("res({}) != Usum({}) = {}",result,sum,carry_out);
-   let overflow = signed_bitfield::<L>(BitField::<L>(result)) != signed_sum.0;
-   dbg_ln!("Sres({}) != Ssum({}) = {}",signed_bitfield::<L>(sum.0.into()),signed_sum,overflow);
-   (result,carry_out,overflow)
+
+   let result = (u_sum & 0xFFFFFFFF) as u32;
+   dbg_ln!("Ssum = {} + {} + {} = {}",signed_bitfield::<L>(a),signed_bitfield::<L>(b),carry,signed_sum);
+   let carry_out = result as u64 != u_sum;
+   dbg_ln!("C = {:x} != {:x} = {}",u_sum & 0xFFFFFFFF,u_sum,carry_out);
+   let overflow = signed_bitfield::<L>(BitField::<L>(result as u32)) != signed_sum.0;
+   dbg_ln!("R= {}",result & 0xFFFFFFFF);
+   ((result & 0xFFFFFFFF) as u32,carry_out,overflow)
 }
 

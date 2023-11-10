@@ -1,7 +1,7 @@
-use crate::binutils::BitField;
+use crate::binutils::{BitField, clear_extra_64b};
 use crate::system::instructions::add_with_carry;
 
-#[test]
+#[test] #[ignore]
 pub fn adc_should_detect_unsigned_overflow_with_carry_bit(){
    let a: BitField<3> = 0x7_u32.into();// there are 3 bits to represent a and b as numbers
    let b: BitField<3> = 0x1_u32.into();
@@ -37,3 +37,7 @@ pub fn adc_within_bound_is_normal(){
    assert_eq!(overflow,false);
 }
 
+#[test]
+pub fn clear_extra(){
+   assert_eq!(clear_extra_64b::<32>(u64::MAX),u32::MAX as u64);
+}

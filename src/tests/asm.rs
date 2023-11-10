@@ -80,7 +80,27 @@ fn asm_file_to_elf_armv6(path: &Path)->Result<PathBuf,std::io::Error>{
       .arg("-o")
       .arg(fname)
       .status()
-      .expect("could not link");
+      .expect("could not assemble");
+
+   Ok(ret)
+}
+
+pub fn asm_file_to_elf_armv6m(path: &Path)->Result<PathBuf,std::io::Error>{
+   println!("forcing T2 encoding");
+   use std::process::Command;
+   let mut fname = String::new();
+   fname.push_str(path.to_str().unwrap());
+   fname = fname.replace(".s", "");
+   fname.push_str(".elf");
+   println!("writing to {:?}",fname);
+   let ret = PathBuf::from(fname.clone());
+   Command::new("arm-none-eabi-as")
+      .arg(path.to_str().unwrap())
+      .arg("-march=armv6-m")
+      .arg("-o")
+      .arg(fname)
+      .status()
+      .expect("could not assemble");
 
    Ok(ret)
 }
@@ -100,7 +120,7 @@ pub fn asm_file_to_elf_armv6t2(path: &Path)->Result<PathBuf,std::io::Error>{
       .arg("-o")
       .arg(fname)
       .status()
-      .expect("could not link");
+      .expect("could not assemble");
 
    Ok(ret)
 }

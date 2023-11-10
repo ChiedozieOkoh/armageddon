@@ -5,11 +5,19 @@ use std::path::Path;
 
 use crate::binutils::from_arm_bytes;
 use crate::system::instructions::{zero_flag, negative_flag, carry_flag, overflow_flag};
-use crate::tests::asm::{write_asm, asm_file_to_elf};
+use crate::tests::asm::{write_asm, asm_file_to_elf, asm_file_to_elf_armv6m};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
 use crate::system::{SysErr, System};
 use crate::elf::decoder::to_native_endianness_32b;
 use super::gdb_script;
+
+use crate::elf::decoder::{
+      SectionHeader,
+      get_header,
+      get_all_section_headers,
+      is_text_section_hdr,
+      read_text_section
+   };
 
 fn run_assembly<
    T: Any,
@@ -18,13 +26,57 @@ fn run_assembly<
    write_asm(path, code)?;
    let elf = asm_file_to_elf(path)?;
 
-   use crate::elf::decoder::{
-      SectionHeader,
-      get_header,
-      get_all_section_headers,
-      is_text_section_hdr,
-      read_text_section
-   };
+   let (elf_header,mut reader) = get_header(&elf).unwrap();
+
+   let maybe_hdr = get_all_section_headers(&mut reader, &elf_header);
+   if maybe_hdr.is_err(){
+      std::fs::remove_file(path)?;
+      std::fs::remove_file(&elf)?;
+      return Err(Error::new(ErrorKind::Other, "could not read hdr"));
+   }
+
+   let section_headers = maybe_hdr.unwrap();
+   println!("sect_hdrs {:?}",section_headers);
+   assert!(!section_headers.is_empty());
+
+   let text_sect_hdr: Vec<SectionHeader> = section_headers.into_iter()
+      .filter(|hdr| is_text_section_hdr(&elf_header, hdr))
+      .collect();
+
+   println!("header {:?}",text_sect_hdr);
+   assert_eq!(text_sect_hdr.len(),1);
+   let sect_hdr = &text_sect_hdr[0];
+
+   let maybe_text_section = read_text_section(&mut reader, &elf_header, sect_hdr);
+   if maybe_text_section.is_err(){
+      std::fs::remove_file(path)?;
+      std::fs::remove_file(&elf)?;
+      return Err(Error::new(ErrorKind::Other, "could not read text section"));
+   }
+
+   let text_section = maybe_text_section.unwrap();
+   assert!(!text_section.is_empty());
+
+   let entry_point = to_native_endianness_32b(&elf_header, &elf_header._entry_point);
+
+   let res = interpreter(entry_point as usize, &text_section[..]);
+
+   if res.as_ref().is_err(){
+      println!("failed execution exited due to: {:?}",res.as_ref().err());
+   }
+
+   std::fs::remove_file(path)?;
+   std::fs::remove_file(&elf)?;
+   return Ok(res.unwrap());
+}
+
+
+fn run_assembly_armv6m<
+   T: Any,
+   F: Fn(usize,&[u8])->Result<T,SysErr>
+>(path: &Path,code: &[u8], interpreter: F)->Result<T,std::io::Error>{
+   write_asm(path, code)?;
+   let elf = asm_file_to_elf_armv6m(path)?;
 
    let (elf_header,mut reader) = get_header(&elf).unwrap();
 
@@ -83,7 +135,7 @@ fn load_code_into_system(entry_point: usize, code: &[u8])->Result<System, SysErr
 pub fn should_do_add()->Result<(),std::io::Error>{
    run_assembly(
       &Path::new("sim_add.s"),
-      b".thumb\n.text\nADD r0,r1\nADD r0,r1,#2\nADD r0,#200\n",
+      b".thumb\n.text\nADD r0,r1\nADD r0,r1,#2\nADD r0,#200\nADD r0,r1",
       |entry_point, code|{
          let mut sys = load_code_into_system(entry_point, code)?;
          println!("memory: {:?}",sys.memory);
@@ -99,6 +151,12 @@ pub fn should_do_add()->Result<(),std::io::Error>{
          sys.set_pc(sys.registers.pc + 2)?;
          sys.step()?;
          assert_eq!(sys.registers.generic[0],242);
+
+         sys.registers.generic[0] = 0xF0000000;
+         sys.registers.generic[1] = 1;
+         sys.set_pc(sys.registers.pc + 2)?;
+         sys.step()?;
+         assert_eq!(sys.registers.generic[0], 0xF0000000 + 1);
          return Ok(());
       }
    )?;
@@ -187,6 +245,9 @@ pub fn should_do_compare()->Result<(),std::io::Error>{
       CMP r0,#0
       CMP r0,#1
       CMP r0,#2
+      CMP r0,#1
+      CMP r0,#20
+      CMP r0,#1
       ",
       |entry_point, code|{
          let mut sys = load_code_into_system(entry_point, code)?;
@@ -215,10 +276,90 @@ pub fn should_do_compare()->Result<(),std::io::Error>{
          incr = sys.step()?;
          assert_eq!(zero_flag(sys.xpsr),false);
          assert_eq!(zero_flag(sys.xpsr),negative_flag(sys.xpsr));
+         sys.offset_pc(incr)?;
+
+         sys.registers.generic[0] = 2; //testing BHI
+         incr = sys.step()?;
+         assert_eq!(zero_flag(sys.xpsr),false);
+         assert_eq!(carry_flag(sys.xpsr),true);
+         sys.offset_pc(incr)?;
+
+         sys.registers.generic[0] = 1; //testing BLS
+         incr = sys.step()?;
+         assert!(!carry_flag(sys.xpsr) || zero_flag(sys.xpsr));
+         sys.offset_pc(incr)?;
+
+         sys.registers.generic[0] = 1; //testing BLS
+         incr = sys.step()?;
+         assert!(!carry_flag(sys.xpsr) || zero_flag(sys.xpsr));
          return Ok(());
       }
    )?;
    return Ok(());
+}
+
+#[test]
+pub fn should_support_stack()->Result<(), std::io::Error>{
+   let bin_size = 1024;
+   let code = b".thumb
+      .text
+         LDR r0, =1024
+         MSR MSP,r0
+         MOV r0,#5
+         MOV r1,#17
+         MOV r2,#56
+         PUSH {r0,r1,r2}
+         POP  {r4,r5,r6}
+         ADD r0,r4,r5
+         ADD r0,r0,r6
+      .pool
+      ";
+
+   run_assembly_armv6m(
+      Path::new("sim_stack.s"),
+      code,
+      |entry_point, binary|{
+         let mut sys = load_code_into_system(entry_point, binary)?;
+         sys.expand_memory_to(bin_size);
+         let i = sys.step()?;  //LDR r0, =1024
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;  //MSR MSP,r0
+         assert_eq!(sys.get_sp(), 1024);
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?; //MOV r0, #5
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?; //MOV r1, #17
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?; //MOV r2, #56
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?; //PUSH {r0,r1,r2}
+         assert_eq!(sys.get_sp(),1024 - (4*3));
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?; //POP {r4,r5,r6}
+         assert_eq!(sys.registers.generic[4],5);
+         assert_eq!(sys.registers.generic[5],17);
+         assert_eq!(sys.registers.generic[6],56);
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         assert_eq!(sys.registers.generic[0], 5 + 17);
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         assert_eq!(sys.registers.generic[0], 5 + 17 + 56);
+         assert_eq!(sys.get_sp(),1024);
+         sys.offset_pc(i)?;
+
+         Ok(())
+   })?;
+
+   Ok(())
 }
 
 #[test] 
@@ -259,6 +400,63 @@ fn run_euclid(r0_value: u32, r1_value: u32)->Result<(u32,u32), std::io::Error>{
       }
    )?;
 
+   return Ok(res);
+}
+
+#[test]
+pub fn fibonnaci()->Result<(),std::io::Error>{
+   assert_eq!(run_fibonnaci(0).unwrap(),1);
+   assert_eq!(run_fibonnaci(1).unwrap(),2);
+   assert_eq!(run_fibonnaci(2).unwrap(),3);
+   assert_eq!(run_fibonnaci(3).unwrap(),5);
+   assert_eq!(run_fibonnaci(4).unwrap(),8);
+   assert_eq!(run_fibonnaci(5).unwrap(),13);
+   Ok(())
+}
+
+fn run_fibonnaci(nth_term: u32)->Result<u32,std::io::Error>{
+   let bin_size = 1024;
+   let code = 
+   b"
+   .thumb
+   .text
+      LDR r1, =1024
+      MSR MSP,r1
+      MOV r1,#0
+      MOV r2,#1
+      PUSH {r0,r1,r2}
+      BL _fib
+      B _done
+         .pool
+      _fib:
+         POP {r0,r1,r2}
+         ADD r3,r1,r2
+         CMP r0,#0
+         BHI _recurse
+         BX LR
+         _recurse:
+            SUB r0,#1
+            PUSH {r0,r2,r3}
+            B _fib
+      _done:
+         NOP
+   ";
+
+   let res =  run_assembly_armv6m(
+      Path::new("sim_fibonnaci.s"),
+      code, 
+      |entry_point, code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+         sys.expand_memory_to(bin_size);
+         sys.registers.generic[0] = nth_term;
+
+         while sys.registers.pc < code.len(){
+            let incr = sys.step()?;
+            sys.offset_pc(incr)?;
+         }
+         return Ok(sys.registers.generic[3]);
+      }
+   )?;
    return Ok(res);
 }
 
