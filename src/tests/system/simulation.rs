@@ -7,7 +7,7 @@ use crate::binutils::from_arm_bytes;
 use crate::system::instructions::{zero_flag, negative_flag, carry_flag, overflow_flag};
 use crate::tests::asm::{write_asm, asm_file_to_elf, asm_file_to_elf_armv6m};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
-use crate::system::{SysErr, System};
+use crate::system::{ArmException, System};
 use crate::elf::decoder::to_native_endianness_32b;
 use super::gdb_script;
 
@@ -21,7 +21,7 @@ use crate::elf::decoder::{
 
 fn run_assembly<
    T: Any,
-   F: Fn(usize,&[u8])->Result<T,SysErr>
+   F: Fn(usize,&[u8])->Result<T,ArmException>
 >(path: &Path,code: &[u8], interpreter: F)->Result<T,std::io::Error>{
    write_asm(path, code)?;
    let elf = asm_file_to_elf(path)?;
@@ -73,7 +73,7 @@ fn run_assembly<
 
 fn run_assembly_armv6m<
    T: Any,
-   F: Fn(usize,&[u8])->Result<T,SysErr>
+   F: Fn(usize,&[u8])->Result<T,ArmException>
 >(path: &Path,code: &[u8], interpreter: F)->Result<T,std::io::Error>{
    write_asm(path, code)?;
    let elf = asm_file_to_elf_armv6m(path)?;
@@ -122,7 +122,7 @@ fn run_assembly_armv6m<
    return Ok(res.unwrap());
 }
 
-fn load_code_into_system(entry_point: usize, code: &[u8])->Result<System, SysErr>{
+fn load_code_into_system(entry_point: usize, code: &[u8])->Result<System, ArmException>{
    let mut sys = System::create(0);
    for c in code{
       sys.memory.push(*c);
@@ -326,6 +326,7 @@ pub fn should_support_stack()->Result<(), std::io::Error>{
 
          let i = sys.step()?;  //MSR MSP,r0
          assert_eq!(sys.get_sp(), 1024);
+         assert_eq!(sys.registers.sp_main, 1024);
          sys.offset_pc(i)?;
 
          let i = sys.step()?; //MOV r0, #5
@@ -339,6 +340,7 @@ pub fn should_support_stack()->Result<(), std::io::Error>{
 
          let i = sys.step()?; //PUSH {r0,r1,r2}
          assert_eq!(sys.get_sp(),1024 - (4*3));
+         assert_eq!(sys.registers.sp_main,1024 - (4*3));
          sys.offset_pc(i)?;
 
          let i = sys.step()?; //POP {r4,r5,r6}
@@ -354,6 +356,7 @@ pub fn should_support_stack()->Result<(), std::io::Error>{
          let i = sys.step()?;
          assert_eq!(sys.registers.generic[0], 5 + 17 + 56);
          assert_eq!(sys.get_sp(),1024);
+         assert_eq!(sys.registers.sp_main, 1024);
          sys.offset_pc(i)?;
 
          Ok(())
@@ -411,6 +414,7 @@ pub fn fibonnaci()->Result<(),std::io::Error>{
    assert_eq!(run_fibonnaci(3).unwrap(),5);
    assert_eq!(run_fibonnaci(4).unwrap(),8);
    assert_eq!(run_fibonnaci(5).unwrap(),13);
+   assert_eq!(run_fibonnaci(6).unwrap(),21);
    Ok(())
 }
 

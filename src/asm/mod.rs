@@ -100,13 +100,7 @@ fn format_register(f: &mut fmt::Formatter<'_>, number: u8) -> fmt::Result{
    }
 }
 
-use crate::{binutils::BitField, system::SysErr};
+use crate::binutils::BitField;
 
 pub type Literal<const L: u32> = BitField<L>;
 
-pub trait Intruction{
-   type IOperand;
-   fn has_opcode(hw: &HalfWord)->bool;
-   fn get_operands(hw: &HalfWord)->Self::IOperand;
-   fn execute(args: Self::IOperand)->Result<(),SysErr>;
-}

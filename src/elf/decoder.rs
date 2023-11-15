@@ -215,6 +215,11 @@ fn has_local_binding(symbol: &SymbolTableEntry) -> bool{
    }
 }
 
+fn has_any_binding(symbol: &SymbolTableEntry) -> bool{
+   let binding: Option<SymbolBinding> = symbol.into();
+   return binding.is_some();
+}
+
 pub enum SymbolType{
    Notype = 0x0,
    Object = 0x1,
@@ -237,8 +242,15 @@ pub fn is_text_section_hdr(header: &ElfHeader, sect_header: &SectionHeader)->boo
    let flags = to_native_endianness_32b(header,&sect_header.flags);
    let _type = to_native_endianness_32b(header, &sect_header._type);
    const TEXT_MASK: u32 = SectionHeaderFlag::Allocatable as u32 | SectionHeaderFlag::Executable as u32;
-   dbg_ln!("f: {} t: {} == f:{} t:{}",flags,_type,TEXT_MASK,SectionHeaderType::PROGBITS as u32);
+   //dbg_ln!("f: {} t: {} == f:{} t:{}",flags,_type,TEXT_MASK,SectionHeaderType::PROGBITS as u32);
    (_type == SectionHeaderType::PROGBITS as u32) && (flags == TEXT_MASK)
+}
+
+pub fn is_data_section_hdr(header: &ElfHeader, sect_header: &SectionHeader)->bool{
+   let flags = to_native_endianness_32b(header,&sect_header.flags);
+   let _type = to_native_endianness_32b(header, &sect_header._type);
+   const DATA_MASK: u32 = SectionHeaderFlag::Allocatable as u32 | SectionHeaderFlag::Write as u32;
+   (_type == SectionHeaderType::PROGBITS as u32) && (flags == DATA_MASK)
 }
 
 pub fn is_symbol_table_section_hdr(header: &ElfHeader, sect_header: &SectionHeader)->bool{
@@ -350,7 +362,7 @@ pub fn get_entry_point_offset(elf_header: &ElfHeader)->usize{
    offset as usize
 }
 
-pub fn get_local_symbols(
+pub fn get_section_symbols(
    reader: &mut BufReader<File>,
    elf_header: &ElfHeader,
    symtable_hdr: &SectionHeader
@@ -360,7 +372,7 @@ pub fn get_local_symbols(
    }
 
    if has_no_bytes(elf_header, &symtable_hdr){
-      dbg_ln!("WARN| symbol table section header has not data... this is pretty strange");
+      dbg_ln!("WARN| symbol table section header has no data... this is pretty strange");
       return Ok(Vec::new());
    }
 
@@ -394,7 +406,10 @@ pub fn get_local_symbols(
    }
 
    let local_symbols: Vec<SymbolTableEntry> = entries.into_iter()
-      .filter(|e| has_no_type(e) && has_local_binding(e) && to_native_endianness_32b(elf_header, &e.name_index) != 0)
+      .filter(|e| 
+         has_no_type(e) 
+         && has_any_binding(e) 
+         && to_native_endianness_32b(elf_header, &e.name_index) != 0)
       .collect();
 
    assert!(local_symbols.is_empty() == false);
@@ -416,6 +431,53 @@ pub fn get_text_section_symbols<'a>(
    }else{
       None
    }
+}
+
+pub fn get_all_symbol_names(
+   reader: &mut BufReader<File>,
+   elf_header: &ElfHeader,
+   sym_entries: &Vec<SymbolTableEntry>,
+   str_table_hdr: &SectionHeader,
+   )->Result<Vec<(usize,String)>,ElfError>{
+
+   let names = get_matching_sym_in_place(reader, elf_header, sym_entries, str_table_hdr)?;
+   println!("matching names: {:?}",names);
+   let mut symbol_definitions = Vec::new();
+   for (i,name) in names.into_iter().enumerate(){
+      let addr = to_native_endianness_32b(elf_header, &sym_entries[i].value) as usize;
+      println!("symdef: {}@{}",name,addr);
+      symbol_definitions.push((addr,name));
+   }
+
+   return Ok(symbol_definitions);
+}
+
+fn get_matching_sym_in_place(
+   reader: &mut BufReader<File>,
+   elf_header: &ElfHeader,
+   sym_entries: &Vec<SymbolTableEntry>,
+   str_table_hdr: &SectionHeader,
+)-> Result<Vec<String>,ElfError>{
+   let str_table_pos = to_native_endianness_32b(elf_header, &str_table_hdr.offset_of_entries_in_bytes);
+   let str_table_size = to_native_endianness_32b(elf_header, &str_table_hdr.section_size_in_bytes);
+   let mut str_buffer = vec![0u8;str_table_size as usize];
+
+   reader.seek(std::io::SeekFrom::Start(str_table_pos as u64))?;
+   reader.read_exact(&mut str_buffer)?;
+   
+   let mut symbol_names = Vec::new();
+   let mut symbol_name = String::new();
+
+   for symbol in sym_entries{
+      let mut index = to_native_endianness_32b(elf_header, &symbol.name_index) as usize;
+      while str_buffer[index] as char != '\0'{
+         symbol_name.push(str_buffer[index] as char);
+         index += 1;
+      }
+      symbol_names.push(symbol_name.clone());
+      symbol_name.clear();
+   }
+   return Ok(symbol_names);
 }
 
 pub fn get_matching_symbol_names(
@@ -461,6 +523,97 @@ pub fn build_symbol_byte_offset_map(
    }
 
    return offset_map;
+}
+
+#[derive(Debug)]
+pub struct LiteralPools{
+   data_marks: Vec<usize>,
+   text_marks: Vec<usize>
+}
+pub struct Pool{
+   pub start: usize,
+   pub end: Option<usize>
+}
+
+impl LiteralPools{
+   pub fn create(
+      elf_header: &ElfHeader,
+      names: &Vec<String>,
+      sym_entries: &Vec<&SymbolTableEntry>
+   )->Self{
+      let mut data_marks = Vec::new();
+      let mut text_marks = Vec::new();
+      for (i, name) in names.iter().enumerate(){
+         if name.eq("$d"){
+            let symbol = &sym_entries[i];
+            let offset: u32 = to_native_endianness_32b(&elf_header, &symbol.value);
+            println!("literal pool {}@{}",names[i],offset);
+            data_marks.push(offset as usize);
+         }
+         if name.eq("$t"){
+            let symbol = &sym_entries[i];
+            let offset: u32 = to_native_endianness_32b(&elf_header, &symbol.value);
+            text_marks.push(offset as usize);
+         }
+      }
+      data_marks.sort();
+      text_marks.sort();
+      Self{data_marks, text_marks}
+   }
+
+   pub fn create_from_list(
+      symbols: &Vec<(usize,String)>,
+   )->Self{
+      let mut data_marks = Vec::new();
+      let mut text_marks = Vec::new();
+      for (offset,name) in symbols.iter(){
+         if name.eq("$d"){
+            println!("literal pool {}@{}",name,offset);
+            data_marks.push(*offset);
+         }
+         if name.eq("$t"){
+            text_marks.push(*offset);
+         }
+      }
+      data_marks.sort();
+      text_marks.sort();
+      Self{data_marks, text_marks}
+   }
+
+   pub fn get_pool_at(&self, address: usize)->Option<Pool>{
+      match self.data_marks.iter().position(|d| *d == address){
+         Some(i) => {
+            /*match self.text_marks.iter().position(|t| *t > address){
+               Some(j) => {
+                  println!("{} > {}",self.text_marks[j],self.data_marks[i]);
+                  Some(Pool{start: self.data_marks[i], end: Some(self.text_marks[j])})
+               },
+               None => Some(Pool{start: self.data_marks[i], end: None})
+            }*/
+            let next_d_mark = self.data_marks.iter().position(|d| *d > address);
+            let next_t_mark = self.text_marks.iter().position(|t| *t > address);
+            match next_t_mark{
+               Some(t) => {
+                  match next_d_mark{
+                     Some(d) => {
+                        Some(Pool{start: self.data_marks[i], end: Some(std::cmp::min(self.data_marks[d],self.text_marks[t]))})
+                     },
+                     None => Some(Pool{start: self.data_marks[i], end: Some(self.text_marks[t])})
+                  }
+               },
+               None => {
+                  match next_d_mark{
+                     Some(d) => {
+                        Some(Pool{start: self.data_marks[i], end: Some(self.data_marks[d])})
+                     },
+                     None => Some(Pool{start: self.data_marks[i], end: None})
+                  }
+               }
+            }
+         },
+         None => None,
+      }
+   }
 }
 
 pub fn read_text_section(

@@ -1,4 +1,4 @@
-use crate::asm;
+use crate::asm::{self, PROGRAM_COUNTER};
 use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
@@ -54,6 +54,8 @@ macro_rules! conditional_branches{
    }
 }
 
+type ProcessStackFrame = [u32;8];
+
 impl System{
    pub fn create(capacity: usize)->Self{
       let registers = Registers::create();
@@ -98,8 +100,21 @@ impl System{
       self.xpsr = into_arm_bytes(xpsr_val);
    }
 
+   fn sp_select_bit(&self) -> bool{
+      from_arm_bytes(self.control_register) & 0x02 > 0
+   }
+
+   fn set_sp_select_bit(&mut self, bit: bool){
+      let mut sp_sel = from_arm_bytes(self.control_register);
+      sp_sel = if bit{
+         sp_sel | 0x2
+      }else{
+         sp_sel & (!(0x2))
+      };
+   }
+
    pub fn get_sp(&self)->u32{
-      if from_arm_bytes(self.control_register) & 0x02 > 0{
+      if self.sp_select_bit(){
          match self.mode{
             Mode::Thread => self.registers.sp_process,
             Mode::Handler => panic!("process SP is unavailable while in handler mode"),
@@ -109,9 +124,13 @@ impl System{
       }
    }
 
-   fn set_sp(&mut self, v: u32)->Result<(), SysErr>{
+   pub fn get_sp_frame_alignment(&self)->bool{
+      self.get_sp() & 0x4 > 0
+   }
+
+   fn set_sp(&mut self, v: u32)->Result<(), ArmException>{
       fault_if_not_aligned(v, 4)?;
-      if from_arm_bytes(self.control_register) & 0x02 > 0{
+      if self.sp_select_bit(){
          match self.mode{
             Mode::Thread => {
                println!("set process SP");
@@ -137,12 +156,12 @@ impl System{
       }
    }
 
-   pub fn set_pc(&mut self, addr: usize)->Result<(),SysErr>{
+   pub fn set_pc(&mut self, addr: usize)->Result<(),ArmException>{
       if addr > u32::MAX as usize{
-         return Err(SysErr::HardFault(format!("tried to set PC to ({}), value is unrepresentable by 32bits",addr)));
+         return Err(ArmException::HardFault(format!("tried to set PC to ({}), value is unrepresentable by 32bits",addr)));
       }
       if !is_aligned(addr as u32, 2){
-         return Err(SysErr::HardFault(format!("{} is not 2 byte aligned",addr)));
+         return Err(ArmException::HardFault(format!("{} is not 2 byte aligned",addr)));
       }
       self.registers.pc = addr as usize;
       return Ok(());
@@ -155,14 +174,14 @@ impl System{
       return ((self.registers.pc + 4) as u32 ) & 0xFFFFFFFC;
    }
 
-   pub fn offset_pc(&mut self, offset: i32 )->Result<(),SysErr>{
+   pub fn offset_pc(&mut self, offset: i32 )->Result<(),ArmException>{
       let new_addr = Self::offset_read_pc(self.registers.pc as u32,offset)?;
       println!("pc {0}({0:x}) -> {1}({1:x})",self.registers.pc,new_addr);
       self.registers.pc = new_addr as usize;
       return Ok(());
    }
 
-   fn bx_interworking_pc_offset(&mut self, addr: u32)->Result<i32, SysErr>{
+   fn bx_interworking_pc_offset(&mut self, addr: u32)->Result<i32, ArmException>{
       if (addr & 0xF0000000 == 0xF0000000) && matches!(self.mode, Mode::Handler){
          panic!("exception return not implemented yet");
       }else{
@@ -170,7 +189,7 @@ impl System{
          self.set_epsr_t_bit(bit);
          if bit == false{
             return Err(
-               SysErr::HardFault(
+               ArmException::HardFault(
                   format!(
                      "EPSR.T bit set to 0, addr {} is not interworking but should be",
                      addr
@@ -192,7 +211,7 @@ impl System{
       }
    }
 
-   fn offset_read_pc(pc: u32, offset: i32)->Result<u32, SysErr>{
+   fn offset_read_pc(pc: u32, offset: i32)->Result<u32, ArmException>{
       let new_addr = if offset.is_negative(){
          pc - (offset.wrapping_abs() as u32)
       }else{
@@ -200,13 +219,73 @@ impl System{
       };
 
       if !is_aligned(new_addr , 2){
-         return Err(SysErr::HardFault(format!("invalid address ({})  writes to PC must be 2 byte aligned", new_addr)));
+         return Err(ArmException::HardFault(format!("invalid address ({})  writes to PC must be 2 byte aligned", new_addr)));
       }
 
       return Ok(new_addr);
    }
 
-   pub fn step(&mut self)->Result<i32, SysErr>{
+   fn enter_exception(&mut self, exc_type: ArmException)->Result<(),ArmException>{
+      return Ok(());
+   }
+
+   fn save_context_frame(&mut self,exc_type: ArmException)->Result<(),ArmException>{
+      let sp = self.get_sp();
+      let mut xpsr = from_arm_bytes(self.xpsr);
+      xpsr = if self.get_sp_frame_alignment(){
+         xpsr | (1 << 9)
+      }else{
+         xpsr & (!(1 << 9))
+      };
+
+      let next_instr_address = match exc_type{
+         ArmException::HardFault(_) => (self.registers.pc as u32) + 2
+      };
+
+      let offset = std::mem::size_of::<ProcessStackFrame>();
+      let frame_ptr = sp - offset as u32;
+      write_memory(self,frame_ptr, into_arm_bytes(self.registers.generic[0]))?;
+      write_memory(self,frame_ptr + 4, into_arm_bytes(self.registers.generic[1]))?;
+      write_memory(self,frame_ptr + 8, into_arm_bytes(self.registers.generic[2]))?;
+      write_memory(self,frame_ptr + 12, into_arm_bytes(self.registers.generic[3]))?;
+      write_memory(self,frame_ptr + 16, into_arm_bytes(self.registers.generic[12]))?;
+      write_memory(self,frame_ptr + 20, into_arm_bytes(self.registers.lr))?;
+      write_memory(self,frame_ptr + 24, into_arm_bytes(next_instr_address))?;
+      write_memory(self,frame_ptr + 28, into_arm_bytes(xpsr))?;
+
+      self.registers.lr = match self.mode{
+         Mode::Handler => {0xFFFFFFF1},
+         Mode::Thread =>{
+            if self.sp_select_bit(){0xFFFFFFFD}else{0xFFFFFFF9}
+         }
+      };
+      return Ok(());
+   }
+
+   fn set_ipsr(&mut self, exc_type: &ArmException){
+      let mut new_xpsr = from_arm_bytes(self.xpsr);
+      let mask: u32 = exc_type.number() | 0xFFFFFFD0;
+      new_xpsr &= mask;
+      self.xpsr = into_arm_bytes(new_xpsr);
+   }
+
+   fn get_vtor_value(&self)-> u32{
+      //todo memory map this 
+      return 0;
+   }
+
+   fn jump_to_exception(&mut self, exc_type: &ArmException)->Result<i32, ArmException>{
+      self.mode = Mode::Handler;
+      self.set_ipsr(&exc_type);
+      self.set_sp_select_bit(false);
+      panic!("execptionActive[i], SCS_UpdateStatusRegs() & SetEventRegister() are not implemented");
+      let vector_table = self.get_vtor_value();
+      let handler_addr = vector_table + (4 * exc_type.number());
+      let handler_ptr = from_arm_bytes(load_memory::<4>(self, handler_addr)?);
+      self.bx_interworking_pc_offset(handler_ptr)
+   }
+
+   pub fn step(&mut self)->Result<i32, ArmException>{
       let maybe_code: [u8;2] = load_memory::<2>(&self, self.registers.pc as u32)?;
       let instr_size = instruction_size(maybe_code);
       match instr_size{
@@ -302,6 +381,21 @@ impl System{
                   let addr = self.read_any_register(register.0);
                   println!("will branch to {}",addr);
                   return self.bx_interworking_pc_offset(addr);
+               },
+
+               Opcode::_16Bit(B16::BR_LNK_EXCHANGE) =>{
+                  let register = unpack_operands!(
+                     get_operands(&code, maybe_code),
+                     Operands::BR_LNK_EXCHANGE,
+                     r
+                  );
+                  let interwork_addr = (self.registers.pc  as u32) + instr_size.in_bytes();
+                  self.registers.lr = interwork_addr | 0x1;
+                  let branch_target = self.read_any_register(register.0);
+                  if register.0 == PROGRAM_COUNTER{
+                     println!("WARN: reading from PC register for BLX is unpredictable undefined behaviour");
+                  }
+                  return self.bx_interworking_pc_offset(branch_target);
                },
 
                Opcode::_16Bit(B16::CMP_Imm8) => {
@@ -487,6 +581,27 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::LDM) =>{
+                  let (base, list) = unpack_operands!(
+                     get_operands(&code, maybe_code),
+                     Operands::LoadableList,
+                     b,l
+                  );
+                  let mut data_ptr = self.registers.generic[base.0 as usize];
+                  let registers = get_set_bits(list);
+                  for r in registers{
+                     let v = from_arm_bytes(load_memory(self, data_ptr)?);
+                     self.registers.generic[r as usize] = v;
+                     data_ptr += 4;
+                  }
+
+                  let write_back = ((1 << base.0) & list) == 0;
+                  if write_back{
+                     self.registers.generic[base.0 as usize] = data_ptr;
+                  }
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_16Bit(B16::STR_Imm5) => {
                   let (v_reg,base,offset) = unpack_operands!(
                      get_operands(&code, maybe_code),
@@ -500,6 +615,29 @@ impl System{
 
                   write_memory::<4>(self, addr, into_arm_bytes(val))?;
                   return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STM) =>{
+                  let (base_register,list) = unpack_operands!(
+                     get_operands(&code, maybe_code),
+                     Operands::LoadableList,
+                     r,l
+                  );
+                  let registers = get_set_bits(list);
+                  if ((1 << base_register.0) & list > 0) && (registers[0] != base_register.0){
+                     println!("WARN: r{} will be written back to, but it is not the first in the register list\n the result is UNKNOWN",base_register.0);
+                  }
+                  let mut array_ptr = self.registers.generic[base_register.0 as usize];
+                  for r in registers{
+                     write_memory(
+                        self, 
+                        array_ptr,
+                        into_arm_bytes(self.registers.generic[r as usize]
+                     ))?;
+                     array_ptr += 4;
+                  }
+                  self.registers.generic[base_register.0 as usize] = array_ptr;
+                  Ok(instr_size.in_bytes() as i32)
                },
 
                Opcode::_16Bit(B16::PUSH) => {
@@ -642,15 +780,15 @@ fn is_system_in_le_mode(_sys: &System)-> bool{
    return true;
 }
 
-fn fault_if_not_aligned(addr: u32, alignment_in_bytes: usize)->Result<(), SysErr>{
+fn fault_if_not_aligned(addr: u32, alignment_in_bytes: usize)->Result<(), ArmException>{
    if !is_aligned(addr, alignment_in_bytes as u32){
-      return Err( SysErr::HardFault(format!("address({}) is not correctly aligned for {} byte access",addr,alignment_in_bytes)));
+      return Err( ArmException::HardFault(format!("address({}) is not correctly aligned for {} byte access",addr,alignment_in_bytes)));
    }else{
       return Ok(());
    }
 }
 
-pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],SysErr>{
+pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],ArmException>{
    fault_if_not_aligned(v_addr, T)?;
    let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
       .try_into()
@@ -678,7 +816,7 @@ pub fn load_memory<'a, const T: usize>(sys: &'a System, v_addr: u32)->Result<&'a
 }
 */
 
-pub fn write_memory<const T: usize>(sys: &mut System, v_addr: u32, value: [u8;T])->Result<(), SysErr>{
+pub fn write_memory<const T: usize>(sys: &mut System, v_addr: u32, value: [u8;T])->Result<(), ArmException>{
    fault_if_not_aligned(v_addr, T)?;
    sys.memory[v_addr as usize ..(v_addr as usize + T )].copy_from_slice(&value);
    return Ok(());
@@ -690,10 +828,16 @@ fn is_aligned(v_addr: u32, size: u32)->bool{
 }
 
 #[derive(Clone,Debug)]
-pub enum SysErr{
+pub enum ArmException{
    HardFault(String),
 }
-
+impl ArmException{
+   pub fn number(&self)->u32{
+      match self{
+         Self::HardFault(_) => 3,
+      }
+   }
+}
 //
 //#[repr(u8)]
 //enum AddressAttributes{

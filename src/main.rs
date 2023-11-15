@@ -15,7 +15,7 @@ use std::io::Write;
 use elf::decoder::ElfError;
 
 use crate::asm::interpreter::print_assembly;
-use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_local_symbols, get_text_section_symbols, get_matching_symbol_names,  build_symbol_byte_offset_map, get_entry_point_offset};
+use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_text_section_symbols, get_matching_symbol_names,  build_symbol_byte_offset_map, get_entry_point_offset};
 fn main() {
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{
@@ -97,7 +97,7 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, HashMap<usize,
       .filter(|hdr| is_symbol_table_section_hdr(&elf_header, hdr))
       .collect();
 
-   let sym_entries = get_local_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
+   let sym_entries = get_section_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
    let text_section_symbols = get_text_section_symbols(&elf_header, &section_headers, &sym_entries).unwrap();
    let names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
    let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);
