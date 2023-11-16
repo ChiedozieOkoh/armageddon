@@ -15,7 +15,7 @@ use std::io::Write;
 use elf::decoder::ElfError;
 
 use crate::asm::interpreter::print_assembly;
-use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_text_section_symbols, get_matching_symbol_names,  build_symbol_byte_offset_map, get_entry_point_offset};
+use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_text_section_symbols, get_matching_symbol_names,  build_symbol_byte_offset_map, get_entry_point_offset, get_all_symbol_names};
 fn main() {
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{
@@ -66,7 +66,7 @@ fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
 }
 */
 
-fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, HashMap<usize, String>),ElfError>{
+fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, Vec<(usize, String)>),ElfError>{
    use crate::elf::decoder::{
       SectionHeader,
       get_header,
@@ -98,12 +98,13 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, HashMap<usize,
       .collect();
 
    let sym_entries = get_section_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
-   let text_section_symbols = get_text_section_symbols(&elf_header, &section_headers, &sym_entries).unwrap();
-   let names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
-   let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);
+   //let text_section_symbols = get_text_section_symbols(&elf_header, &section_headers, &sym_entries).unwrap();
+   //let names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
+   //let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);
+   let symbols = get_all_symbol_names(&mut reader, &elf_header, &sym_entries, str_table_hdr).unwrap();
    let entry_point = get_entry_point_offset(&elf_header);
 
-   Ok((text_section, entry_point, text_sect_offset_map))
+   Ok((text_section, entry_point, symbols))
 }
 
 fn exit_on_err<T>(maybe_err: &Result<T,ElfError>){

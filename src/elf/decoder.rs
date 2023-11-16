@@ -449,6 +449,7 @@ pub fn get_all_symbol_names(
       symbol_definitions.push((addr,name));
    }
 
+   symbol_definitions.sort_by_key(|(a, _)| *a);
    return Ok(symbol_definitions);
 }
 
@@ -530,37 +531,13 @@ pub struct LiteralPools{
    data_marks: Vec<usize>,
    text_marks: Vec<usize>
 }
+#[derive(Debug)]
 pub struct Pool{
    pub start: usize,
    pub end: Option<usize>
 }
 
 impl LiteralPools{
-   pub fn create(
-      elf_header: &ElfHeader,
-      names: &Vec<String>,
-      sym_entries: &Vec<&SymbolTableEntry>
-   )->Self{
-      let mut data_marks = Vec::new();
-      let mut text_marks = Vec::new();
-      for (i, name) in names.iter().enumerate(){
-         if name.eq("$d"){
-            let symbol = &sym_entries[i];
-            let offset: u32 = to_native_endianness_32b(&elf_header, &symbol.value);
-            println!("literal pool {}@{}",names[i],offset);
-            data_marks.push(offset as usize);
-         }
-         if name.eq("$t"){
-            let symbol = &sym_entries[i];
-            let offset: u32 = to_native_endianness_32b(&elf_header, &symbol.value);
-            text_marks.push(offset as usize);
-         }
-      }
-      data_marks.sort();
-      text_marks.sort();
-      Self{data_marks, text_marks}
-   }
-
    pub fn create_from_list(
       symbols: &Vec<(usize,String)>,
    )->Self{
@@ -592,10 +569,16 @@ impl LiteralPools{
             }*/
             let next_d_mark = self.data_marks.iter().position(|d| *d > address);
             let next_t_mark = self.text_marks.iter().position(|t| *t > address);
+            println!("for {}, nt:{:?}, nd:{:?}",address,next_t_mark,next_d_mark);
             match next_t_mark{
                Some(t) => {
                   match next_d_mark{
                      Some(d) => {
+                        println!("current {} min {} | {}",
+                                 self.data_marks[i],
+                                 self.data_marks[d],
+                                 self.text_marks[t]
+                                 );
                         Some(Pool{start: self.data_marks[i], end: Some(std::cmp::min(self.data_marks[d],self.text_marks[t]))})
                      },
                      None => Some(Pool{start: self.data_marks[i], end: Some(self.text_marks[t])})
