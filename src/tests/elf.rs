@@ -2,6 +2,7 @@ use std::path::{Path,PathBuf};
 use std::fs::File;
 use std::io::Write;
 use std::process::Command;
+use crate::asm::interpreter::SymbolTable;
 use crate::elf::decoder::{
    get_header,
    get_all_section_headers,
@@ -164,6 +165,12 @@ fn should_get_all_symbols()->Result<(),std::io::Error>{
    let pool = lit_pools.get_pool_at(4).unwrap();
    assert_eq!(pool.start,4);
    assert_eq!(pool.end.unwrap(),8);
+   let mut sym_table = SymbolTable::create(&symbols);
+   
+   assert_eq!(sym_table.progressive_lookup(0),Some(&String::from("_entry_point")));
+   assert_eq!(sym_table.progressive_lookup(8),Some(&String::from("pl_end")));
+   assert_eq!(sym_table.progressive_lookup(data_offset),Some(&String::from("_boot_magic")));
+   assert_eq!(sym_table.progressive_lookup(data_offset + 2),None);
    assert!(symbols.contains(&(text_offset,String::from("_entry_point"))));
    assert!(symbols.contains(&(data_offset,String::from("_boot_magic"))));
    assert!(symbols.contains(&(8,String::from("pl_end"))));
