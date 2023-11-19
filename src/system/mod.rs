@@ -67,6 +67,16 @@ impl System{
          memory: vec![0;capacity]
       }
    }
+   pub fn create_from_text(text: Vec<u8>)->Self{
+      let registers = Registers::create();
+      return System{
+         registers,
+         xpsr: [0;4],
+         control_register: [0;4],
+         mode: Mode::Thread, // when not in a exception the processor is in thread mode
+         memory: text
+      }
+   }
 
    pub fn expand_memory_to(&mut self, new_size: usize ){
       if new_size > self.memory.len(){

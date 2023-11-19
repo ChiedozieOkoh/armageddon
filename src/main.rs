@@ -4,19 +4,42 @@ mod dwarf;
 mod system;
 mod binutils;
 mod log;
+mod ui;
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
-use std::path::{Path,PathBuf};
-use std::fs::File;
-use std::io::Write;
+use std::path::Path;
 use elf::decoder::ElfError;
+use iced::Application;
 
 use crate::asm::interpreter::print_assembly;
-use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_text_section_symbols, get_matching_symbol_names,  build_symbol_byte_offset_map, get_entry_point_offset, get_all_symbol_names};
+use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_entry_point_offset, get_all_symbol_names};
+use crate::system::System;
+use crate::ui::App;
 fn main() {
+   gui_diasm();
+}
+
+
+fn gui_diasm(){
+   let args: Vec<String> = std::env::args().collect();
+   if args.len() != 2{
+      dbg_ln!("you must provide one elf file");
+      std::process::exit(-1);
+   }
+
+   dbg_ln!("DEBUG ENABLED");
+   let maybe_file = Path::new(&args[1]);
+   let maybe_instructions  = load_instruction_opcodes(maybe_file);
+   exit_on_err(&maybe_instructions);
+
+   let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
+   let sys = System::create_from_text(instructions);
+   let flags = (sys,entry_point,symbol_map);
+   App::run(iced::Settings::with_flags(flags)).unwrap();
+}
+fn cli_disasm(){
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{
       dbg_ln!("you must provide one elf file");
@@ -31,7 +54,6 @@ fn main() {
    let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
    print_assembly(&instructions[..],entry_point, &symbol_map);
 }
-
 /*fn assemble(path: &Path, asm: &[u8])->Result<Vec<u8>,ElfError>{
    write_asm(path,asm)?;
    let elf = asm_file_to_elf(path)?;

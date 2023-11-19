@@ -1,4 +1,4 @@
-use crate::{asm::decode::{Opcode,B16}, system::System, elf::decoder::LiteralPools, binutils::{from_arm_bytes_16b, from_arm_bytes}};
+use crate::{asm::decode::{Opcode,B16}, elf::decoder::LiteralPools, binutils::{from_arm_bytes_16b, from_arm_bytes}};
 use super::{decode_operands::{get_operands, pretty_print, get_operands_32b, Operands}, decode::{instruction_size, InstructionSize}};
 
 const INDENT: &str = "   ";
@@ -60,6 +60,70 @@ fn symbol_aware_disassemble(
          line.push_str(&instruction);
          line
 
+}
+
+pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String)>)->Vec<String>{
+   let src_code = disassemble(
+      bytes,
+      symbols,
+      |byte_offset,code,encoded_16b,label|{
+         let maybe_args = get_operands(&code, encoded_16b);
+         symbol_aware_disassemble(byte_offset, code, maybe_args, label)
+      },
+      |byte_offset,code,encoded_32b,label|{
+         let maybe_args = get_operands_32b(&code, encoded_32b);
+         symbol_aware_disassemble(byte_offset, code, maybe_args, label)
+      },
+      |byte_offset,pool,sym_table|{
+         let symbol = sym_table.progressive_lookup(byte_offset);
+         let mut line = String::new(); 
+         if symbol.is_some(){
+            line.push_str(&format!("\n{:#010x} <",byte_offset));
+            line.push_str(symbol.unwrap());
+            line.push_str(">:\n");
+         }
+         match pool.len(){
+            2 => {
+               let short: [u8;2] = [pool[0],pool[1]];
+               let hw = from_arm_bytes_16b(short);
+               line.push_str(&format!("{}{:#x}: .2byte {:#x}",INDENT,byte_offset,hw));
+               line
+            },
+            4 => {
+               let word: [u8;4] = [pool[0],pool[1],pool[2],pool[3]];
+               let wrd = from_arm_bytes(word);
+               line.push_str(&format!("{}{:#x}: .4byte {:#x}",INDENT,byte_offset,wrd));
+               line
+            }
+            _ => {
+               let mut i = 0;
+               for b in pool{
+                  if i != 0 {
+                     let inner_symbol = sym_table.progressive_lookup(byte_offset + i);
+                     if inner_symbol.is_some(){
+                        line.push_str(&format!("\n{:#010x} <",byte_offset + i));
+                        line.push_str(inner_symbol.unwrap());
+                        line.push_str(">:");
+                     }
+                  }
+
+                  if i % 4 == 0{
+                     if i != 0{
+                        line.push('\n');
+                     }
+                     line.push_str(INDENT);
+                     line.push_str(&format!("{:#x}: ",byte_offset + i));
+                     line.push_str(".byte".into());
+                  }
+                  line.push_str(&format!(" {:#04x} ",b));
+                  i +=1;
+               }
+               line
+            }
+         }
+      }
+   );
+   src_code
 }
 
 pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<(usize, String)>){
