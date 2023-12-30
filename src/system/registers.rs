@@ -17,7 +17,7 @@ pub enum SpecialRegister{
    CONTROL
 }
 impl SpecialRegister{
-   pub fn needs_privilaged_access(&self)->bool{
+   pub fn needs_privileged_access(&self)->bool{
       match self{
         SpecialRegister::APSR => false,
         SpecialRegister::IAPSR => todo!(),
@@ -51,6 +51,18 @@ impl Registers{
          pc: 0
       }
    }
+}
+
+#[inline]
+pub fn get_overflow_bit(apsr: Apsr)->bool{
+   let v: u32 = from_arm_bytes(apsr);
+   return (0x10000000 & v) > 0;
+}
+
+#[inline]
+pub fn get_carry_bit(apsr: Apsr)->bool{
+   let v: u32 = from_arm_bytes(apsr);
+   return (0x20000000 & v) > 0;
 }
 
 pub fn set_negative_bit(apsr: &mut Apsr){

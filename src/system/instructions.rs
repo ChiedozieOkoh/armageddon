@@ -86,7 +86,6 @@ pub fn cond_passed(apsr: Apsr, b_cond: &Opcode)->bool{
 
 pub fn compare(a: u32, b: u32)->ConditionFlags{
    let (_, flags) = subtract(a,b);
-   //dbg_ln!("{:?}",flags);
    return flags;
 }
 
@@ -113,13 +112,6 @@ pub fn multiply(a: u32, b: u32)->(u32, bool, bool){
    return (sum,negative,zero);
 }
 
-fn left_shift_left_with_carry(a: u32,shift: u32, carry: u32)->(u32,u32){
-   let extended = a << shift;
-   let result = clear_bit(31, extended);
-   let carry = get_bit(31, extended);
-   (result,carry)
-}
-
 pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-> (u32, bool, bool){
    let u_sum: u64 = (a.0 as u64) + (b.0 as u64) + (carry as u64);
    dbg_ln!("Usum= {} + {} + {} = {}({3:x})",(a.0),(b.0),(carry),u_sum);
@@ -135,6 +127,33 @@ pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-
    dbg_ln!("C = {:x} != {:x} = {}",u_sum & 0xFFFFFFFF,u_sum,carry_out);
    let overflow = signed_bitfield::<L>(BitField::<L>(result as u32)) != signed_sum.0;
    dbg_ln!("R= {}",result & 0xFFFFFFFF);
-   ((result & 0xFFFFFFFF) as u32,carry_out,overflow)
+   return ((result & 0xFFFFFFFF) as u32,carry_out,overflow);
 }
 
+pub fn shift_right(a: u32, shift: u32, overflow: bool)->(u32,ConditionFlags){
+   assert!(shift > 0);
+   let last_discarded_bit = ((1 << (shift - 1)) & a) > 0;
+   let result = a >> shift;
+   let is_negative = (result & 0x80000000) > 0;
+   let flags = ConditionFlags{
+      carry: last_discarded_bit,
+      negative: is_negative,
+      zero: result == 0,
+      overflow
+   };
+   return (result,flags);
+}
+
+pub fn shift_left(a: u32, shift: u32, overflow: bool)->(u32,ConditionFlags){
+   assert!(shift > 0);
+   let last_discarded_bit = ((1 << (32 - shift)) & a) > 0;
+   let result = a << shift;
+   let negative = (result & 0x80000000) > 0;
+   let flags = ConditionFlags{
+      carry: last_discarded_bit,
+      negative,
+      zero: result == 0,
+      overflow
+   };
+   return (result,flags);
+}

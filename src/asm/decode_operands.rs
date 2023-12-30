@@ -56,6 +56,17 @@ pub enum Operands{
    Nibble(Literal<4>)
 }
 
+fn fmt_branch_offset(f: &mut fmt::Formatter<'_>,offset: i32)->fmt::Result{
+   if offset == 0{
+      return write!(f,".");
+   }
+   if offset.is_positive(){
+      write!(f,". + {}",offset)
+   }else{
+      write!(f,".{}",offset)
+   }
+}
+
 //TODO dont hardcode special register names
 impl fmt::Display for Operands{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -65,10 +76,10 @@ impl fmt::Display for Operands{
           Operands::INCR_SP_BY_REG(r) => write!(f,"SP, {}",r),
           Operands::ADR(r, imm8) => write!(f,"{}, {}", r, imm8),
           Operands::ASRS_Imm5(d, r, imm5) => write!(f,"{}, {}, {}", d, r, imm5),
-          Operands::COND_BRANCH(off) => write!(f,".{}",off),
-          Operands::B_ALWAYS(off) => write!(f,".{}",off),
+          Operands::COND_BRANCH(off) => fmt_branch_offset(f, *off),
+          Operands::B_ALWAYS(off) => fmt_branch_offset(f, *off),
           Operands::BREAKPOINT(imm8) => write!(f,"{}",imm8),
-          Operands::BR_LNK(off) => write!(f,".{}",off),
+          Operands::BR_LNK(off) => fmt_branch_offset(f, *off),
           Operands::BR_LNK_EXCHANGE(r) => write!(f,"{}",r),
           Operands::BR_EXCHANGE(r) => write!(f,"{}",r),
           Operands::CMP_Imm8(r, imm8) => write!(f,"{}, {}",r, imm8),

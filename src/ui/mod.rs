@@ -1,7 +1,8 @@
-use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button}, Application, Theme, executor, Command, Element};
+use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet}, Application, Theme, executor, Command, Element};
 
 use crate::{system::System, asm::interpreter::{print_assembly, disasm_text}};
 
+use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
 
 pub struct App{
@@ -40,8 +41,82 @@ fn pane_render<'a>(
    )->Element<'a, Event>{
    match state{
       PaneType::Disassembler => {
-         let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill);
-         container(scrollable(content))
+         let ir = app.system.read_raw_ir();
+         let highlighted = app.disasm.lines().take(1).next().unwrap();
+         let text_widget: iced::widget::Text<'a,iced::Renderer> = if highlighted.contains("<"){
+            text(highlighted).size(TEXT_SIZE).style(iced::color!(100,0,0))
+         }else{
+            text(highlighted).size(TEXT_SIZE)
+         };
+         let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![text_widget];
+         text_box = text_box.spacing(0).padding(0);
+         let mut un_highlighted = String::new();
+         for line in app.disasm.lines().skip(1){
+            if line.contains("<"){
+               //if !un_highlighted.trim().is_empty(){
+                  text_box = text_box.push(
+                     text(&un_highlighted)
+                     .size(TEXT_SIZE)
+                     .width(iced::Length::Fill)
+                  );
+               //}
+               text_box = text_box.push(
+                  text(line)
+                  .size(TEXT_SIZE)
+                  .width(iced::Length::Fill)
+                  .style(iced::color!(100,0,0))
+               );
+               un_highlighted.clear();
+            }else{
+               if !line.trim().is_empty(){
+                  let offset = line.split(":").next();
+                  match offset{
+                     Some(address) => {
+                        let add_v = u32::from_str_radix(
+                           address.trim().trim_start_matches("0x").trim(),
+                           16
+                        ).unwrap();
+                        if add_v == ir{
+                           if !un_highlighted.trim().is_empty(){
+                              text_box = text_box.push(
+                                 text(&un_highlighted)
+                                 .size(TEXT_SIZE)
+                                 .width(iced::Length::Fill)
+                              );
+                           }
+                           text_box = text_box.push(
+                              text(line)
+                              .size(TEXT_SIZE)
+                              .width(iced::Length::Fill)
+                              .font(iced::Font{
+                                 weight: iced::font::Weight::Bold,
+                                 .. Default::default()
+                              })
+                           );
+                           un_highlighted.clear();
+                        }else{
+                           un_highlighted.push_str(line);
+                           un_highlighted.push('\n');
+                        }
+                     },
+                     None => {
+                        un_highlighted.push_str(line);
+                        un_highlighted.push('\n');
+                     }
+                  }
+               }else{
+                  un_highlighted.push('\n');
+               }
+
+               //un_highlighted.push_str(line);
+               //un_highlighted.push('\n');
+            };
+         }
+         if !un_highlighted.trim().is_empty(){
+            text_box = text_box.push(text(&un_highlighted).size(TEXT_SIZE).width(iced::Length::Fill));
+         }
+         //let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill).style(iced::color!(100,0,0));
+         container(scrollable(text_box))
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
@@ -49,7 +124,7 @@ fn pane_render<'a>(
 
       PaneType::SystemState => {
          let str_state = format!(
-            "r0: {}\nr1: {}\nr2: {}\nr3: {}\nr4: {}\nr5: {}\nr6: {}\nr7: {}\nr8: {}\nr9: {}\nr10: {}\nr11: {}\nr12: {}\nSP: {:#010x}\nLR: {:#x}\nPC: {:#x}\n",
+            "r0: {}\nr1: {}\nr2: {}\nr3: {}\nr4: {}\nr5: {}\nr6: {}\nr7: {}\nr8: {}\nr9: {}\nr10: {}\nr11: {}\nr12: {}\nSP: {:#010x}\nLR: {:#x}\nPC: {:#x}\nXPSR: {:#010x}",
             app.system.registers.generic[0],
             app.system.registers.generic[1],
             app.system.registers.generic[2],
@@ -65,10 +140,12 @@ fn pane_render<'a>(
             app.system.registers.generic[12],
             app.system.get_sp(),
             app.system.registers.lr,
-            app.system.read_pc_word_aligned()
+            app.system.read_raw_ir(),
+            from_arm_bytes(app.system.xpsr)
          );
          text(str_state).size(TEXT_SIZE).width(iced::Length::Fill).into()
-      }
+      },
+
       _ => todo!()
    }
 }
@@ -90,7 +167,7 @@ impl Application for App{
    type Executor = executor::Default;
 
    fn new(args: Self::Flags)->(Self,Command<Event>){
-      let (mut state,first) = pane_grid::State::new(PaneType::Disassembler);
+      let (state,first) = pane_grid::State::new(PaneType::Disassembler);
       
       let (sys,entry_point, symbols) = args;
       let disasm = disasm_text(&sys.memory, entry_point, &symbols);
@@ -127,6 +204,16 @@ impl Application for App{
             self._state.close(&pane);
             self.n_panes -= 1;
          },
+         Event::Dbg(Debug::Step) => {
+            match self.system.step(){
+               Ok(offset) => {
+                  self.system.offset_pc(offset).unwrap();
+               },
+               Err(fault) => {
+                  panic!("{:?}",fault);
+               }
+            }
+         }
          _ => todo!()
       }
 
@@ -165,7 +252,6 @@ pub enum Gui{
    SplitPane(pane_grid::Pane,PaneType,pane_grid::Axis),
    ResizePane(pane_grid::ResizeEvent),
    ClosePane(pane_grid::Pane),
-   DefLayout,
 }
 
 #[derive(Debug,Clone)]

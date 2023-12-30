@@ -1,11 +1,13 @@
-use crate::asm::{self, PROGRAM_COUNTER};
+use std::fmt::Display;
+
+use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
 use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
 use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply} ;
 
-use self::instructions::cond_passed;
-use self::registers::{Registers, Apsr, SpecialRegister};
+use self::instructions::{cond_passed, shift_left, shift_right};
+use self::registers::{Registers, Apsr, SpecialRegister, get_overflow_bit};
 pub mod registers;
 pub mod instructions;
 
@@ -16,7 +18,8 @@ pub struct System{
    pub xpsr: Apsr,
    pub control_register: [u8;4],
    mode: Mode,
-   pub memory: Vec<u8>
+   pub memory: Vec<u8>,
+   pub breakpoints: Vec<usize>
 }
 
 #[derive(Debug)]
@@ -64,9 +67,11 @@ impl System{
          xpsr: [0;4],
          control_register: [0;4],
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
-         memory: vec![0;capacity]
+         memory: vec![0;capacity],
+         breakpoints: Vec::new(),
       }
    }
+
    pub fn create_from_text(text: Vec<u8>)->Self{
       let registers = Registers::create();
       return System{
@@ -74,7 +79,8 @@ impl System{
          xpsr: [0;4],
          control_register: [0;4],
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
-         memory: text
+         memory: text,
+         breakpoints: Vec::new(),
       }
    }
 
@@ -121,6 +127,7 @@ impl System{
       }else{
          sp_sel & (!(0x2))
       };
+      self.control_register = into_arm_bytes(sp_sel);
    }
 
    pub fn get_sp(&self)->u32{
@@ -177,6 +184,10 @@ impl System{
       return Ok(());
    }
 
+   pub fn read_raw_ir(&self)->u32{
+      self.registers.pc as u32
+   }
+
    pub fn read_pc_word_aligned(&self)->u32{
       println!("(wrd algin : {} + {} = {} ) & {:04b}",
                self.registers.pc,4,
@@ -210,7 +221,7 @@ impl System{
       }
    }
 
-   fn in_privilaged_mode(&self)->bool{
+   fn in_privileged_mode(&self)->bool{
       match self.mode{
          Mode::Handler => {
             true
@@ -295,8 +306,17 @@ impl System{
       self.bx_interworking_pc_offset(handler_ptr)
    }
 
+   #[inline]
+   pub fn on_breakpoint(&self)->bool{
+      self.breakpoints.contains(&self.registers.pc)
+   }
+   #[inline]
+   pub fn add_breakpoint(&mut self, addr: u32){
+      self.breakpoints.push(addr as usize);
+   }
+
    pub fn step(&mut self)->Result<i32, ArmException>{
-      let maybe_code: [u8;2] = load_memory::<2>(&self, self.registers.pc as u32)?;
+      let maybe_code: [u8;2] = load_thumb_instr(&self, self.registers.pc as u32)?;
       let instr_size = instruction_size(maybe_code);
       match instr_size{
          InstructionSize::B16 => {
@@ -523,11 +543,13 @@ impl System{
                   }else{
                      xpsr = clear_bit(31,xpsr);
                   }
+
                   if zero{
                      xpsr = set_bit(30,xpsr);
                   }else{
                      xpsr = clear_bit(30,xpsr);
                   }
+
                   self.xpsr = into_arm_bytes(xpsr);
                   return Ok(instr_size.in_bytes() as i32);
                },
@@ -541,6 +563,7 @@ impl System{
                   self.do_move(dest.0 as usize, imm8.0);
                   return Ok(instr_size.in_bytes() as i32);
                },
+
                Opcode::_16Bit(B16::MOV_REGS_T1)=> {
                   let (dest, src) = unpack_operands!(
                      get_operands(&code, maybe_code),
@@ -577,6 +600,19 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::LDR_Imm5)=>{
+                  let (dest,base,offset) = unpack_operands!(
+                     get_operands(&code, maybe_code),
+                     Operands::LDR_Imm5,
+                     a,b,c
+                  );
+
+                  let addr = self.registers.generic[base.0 as usize] + offset.0;
+                  let value: [u8;4] = load_memory(&self, addr)?;
+                  self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
+                  return Ok(instr_size.in_bytes() as i32);
+               }
+
                Opcode::_16Bit(B16::LDR_PC_Imm8) => {
                   let (dest,src,offset) = unpack_operands!(
                      get_operands(&code, maybe_code),
@@ -609,6 +645,76 @@ impl System{
                   if write_back{
                      self.registers.generic[base.0 as usize] = data_ptr;
                   }
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LSL_Imm5) =>{
+                  let (dest,src,ammount) = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::LS_Imm5,
+                     a,b,c
+                  );
+
+                  let overflow = get_overflow_bit(self.xpsr);
+                  let arg = self.registers.generic[src.0 as usize];
+                  let (res, flags) = shift_left(arg, ammount.0, overflow);
+                  self.registers.generic[dest.0 as usize] = res;
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LSL_REGS) =>{
+                  let (dest,arg) = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let overflow = get_overflow_bit(self.xpsr);
+                  let val = self.registers.generic[dest.0 as usize];
+                  let shift = self.registers.generic[arg.0 as usize] & 0xFF;
+
+                  let (res, flags) = shift_left(val, shift, overflow);
+
+                  self.registers.generic[dest.0 as usize] = res;
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LSR_Imm5) =>{
+                  let (dest,src,ammount) = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::LS_Imm5,
+                     a,b,c
+                  );
+
+                  let overflow = get_overflow_bit(self.xpsr);
+                  let arg = self.registers.generic[src.0 as usize];
+                  let (res, flags) = shift_right(arg, ammount.0, overflow);
+                  self.registers.generic[dest.0 as usize] = res;
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LSR_REGS) =>{
+                  let (dest,arg) = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let overflow = get_overflow_bit(self.xpsr);
+                  let val = self.registers.generic[dest.0 as usize];
+                  let shift = self.registers.generic[arg.0 as usize] & 0xFF;
+
+                  let (res, flags) = shift_right(val, shift, overflow);
+
+                  self.registers.generic[dest.0 as usize] = res;
+                  self.update_apsr(&flags);
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -705,13 +811,11 @@ impl System{
                Opcode::_16Bit(B16::NOP) => {
                   return Ok(instr_size.in_bytes() as i32);
                },
-               _ => unreachable!()
+               _ => todo!()
             } 
          },
          InstructionSize::B32 => {
-            //for armv6-m instruction fetches are always 16bit aligned 
-            fault_if_not_aligned(self.registers.pc as u32, 2)?;
-            let word: [u8;4] = load_unchecked_32b(&self, self.registers.pc as u32);
+            let word: [u8;4] = load_instr_32b(&self, self.registers.pc as u32)?;
             let instr_32b = Opcode::from(word);
             match instr_32b{
                Opcode::_32Bit(B32::MSR) => {
@@ -721,7 +825,7 @@ impl System{
                      s,y
                   );
 
-                  if special.needs_privilaged_access() && !self.in_privilaged_mode(){
+                  if special.needs_privileged_access() && !self.in_privileged_mode(){
                      println!("Do not have access rights to {:?} in {:?} mode",special,self.mode);
                      return Ok(instr_size.in_bytes() as i32);
                   }
@@ -773,9 +877,66 @@ impl System{
 
       self.xpsr = into_arm_bytes(new_xpsr);
    }
+
+   pub fn check_permission(&self, addr: u32, acc: Access)->Result<(),ArmException>{
+      let (attributes,exec_never) = self.get_permissions(addr);
+      let err_msg = Err(ArmException::HardFault(
+            format!("Invalid attempt to {:?} at address {:#x}, :{:#x} is {}",
+            acc,
+            addr,
+            addr,
+            attributes)
+         )
+      );
+      let level = if self.in_privileged_mode(){
+         attributes.privileged
+      }else{
+         attributes.unprivileged
+      };
+      match acc{
+        Access::READ => match level{
+           AccessPermission::NoAccess=> err_msg,
+           _ => Ok(())
+        },
+        Access::WRITE => match level{
+           AccessPermission::NoAccess | AccessPermission::ReadOnly => err_msg,
+           _ => Ok(())
+        },
+        Access::Execute => if exec_never {
+           Err(ArmException::HardFault(format!("cannot execute instruction at {:#x} it is marked as XN",addr)))
+        }else{
+           match level {
+              AccessPermission::NoAccess => err_msg,
+              _ => Ok(())
+           }
+        },
+      }
+   }
+
+   pub fn get_permissions(&self, addr: u32)->(MemPermission,bool){
+      //TODO allow configurable address attributes map with MPU
+      self.default_permissions(addr)
+   }
+
+   ///bool is the execute never flag
+   #[inline]
+   pub fn default_permissions(&self, addr: u32)->(MemPermission,bool){
+      let sig = (addr & 0xE0000000) >> 29;
+      match sig{
+         0b000 => (MemPermission::full_access(),false),
+         0b001 => (MemPermission::full_access(),false),
+         0b010 => (MemPermission::full_access(),true),
+         0b011 => (MemPermission::full_access(),false),
+         0b100 => (MemPermission::full_access(),false),
+         0b101 => (MemPermission::full_access(),true),
+         0b110 => (MemPermission::full_access(),true), 
+         0b111 => (MemPermission::full_access(),true), 
+         _ => unreachable!()
+      }
+   }
 }
 
-pub fn is_thread_privelaged(sys: &System)->bool{
+pub fn is_thread_privileged(sys: &System)->bool{
    let v = from_arm_bytes(sys.control_register);
    return (v & 1) == 0;
 }
@@ -800,17 +961,30 @@ fn fault_if_not_aligned(addr: u32, alignment_in_bytes: usize)->Result<(), ArmExc
 
 pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],ArmException>{
    fault_if_not_aligned(v_addr, T)?;
+   sys.check_permission(v_addr, Access::READ)?;
    let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
       .try_into()
       .expect("should not access out of bounds memory");
    return Ok(mem);
 }
 
-fn load_unchecked_32b(sys: &System, addr: u32)->[u8;4]{
+pub fn load_thumb_instr(sys: &System, v_addr: u32)->Result<[u8;2],ArmException>{
+   fault_if_not_aligned(v_addr, 2)?;
+   sys.check_permission(v_addr, Access::Execute)?;
+   let mem: [u8;2] = sys.memory[v_addr as usize .. (v_addr as usize + 2)]
+      .try_into()
+      .expect("should not access out of bounds memory");
+   return Ok(mem);
+}
+
+fn load_instr_32b(sys: &System, addr: u32)->Result<[u8;4],ArmException>{
+   //for armv6-m instruction fetches are always 16bit aligned 
+   fault_if_not_aligned(addr, 2)?;
+   sys.check_permission(addr, Access::Execute)?;
    let mem: [u8;4] = sys.memory[addr as usize .. (addr as usize + 4)]
       .try_into()
       .expect("should not access out of bounds memory");
-   return mem;
+   return Ok(mem);
 }
 
 /*
@@ -828,6 +1002,7 @@ pub fn load_memory<'a, const T: usize>(sys: &'a System, v_addr: u32)->Result<&'a
 
 pub fn write_memory<const T: usize>(sys: &mut System, v_addr: u32, value: [u8;T])->Result<(), ArmException>{
    fault_if_not_aligned(v_addr, T)?;
+   sys.check_permission(v_addr, Access::WRITE)?;
    sys.memory[v_addr as usize ..(v_addr as usize + T )].copy_from_slice(&value);
    return Ok(());
 }
@@ -848,28 +1023,110 @@ impl ArmException{
       }
    }
 }
-//
-//#[repr(u8)]
-//enum AddressAttributes{
-//   Normal = 0x1,
-//   Device = 0x2,
-//   DevSharable = 0x4,
-//   DevNonShare = 0x8,
-//   ExecuteNever = 0x16,
-//   StronglyOrdered = 0x32
-//}
-//
-//fn default_address_map(v_addr: u32)-> u8{
-//   match v_addr{
-//      0x0 ..= 0x1FFFFFFF => AddressAttributes::Normal as u8,
-//      0x20000000 ..= 0x3FFFFFFF => AddressAttributes::Normal as u8,
-//      0x40000000 ..= 0x5FFFFFFF => AddressAttributes::Device as u8,
-//      0x60000000 ..= 0x7FFFFFFF => AddressAttributes::Normal as u8,
-//      0x80000000 ..= 0x9FFFFFFF => AddressAttributes::Normal as u8,
-//      0xA0000000 ..= 0xBFFFFFFF => AddressAttributes::DevSharable as u8 | AddressAttributes::ExecuteNever as u8,
-//      0xC0000000 ..= 0xDFFFFFFF => AddressAttributes::DevNonShare as u8 | AddressAttributes::ExecuteNever as u8,
-//      0xE0000000 ..= 0xE00FFFFF => AddressAttributes::StronglyOrdered as u8,
-//      0xE0100000 ..= 0xFFFFFFFF => AddressAttributes::ExecuteNever as u8
-//   }
-//}
-//
+
+fn assert_executable(addr: u32)->Result<(),ArmException>{
+   if default_address_map(addr) & (AddressAttributes::ExecuteNever as u8) > 0 {
+      return Err(
+         ArmException::HardFault(format!("Cannot execute address code on {:#010x} it is XN",addr))
+      );
+   }else{
+      return Ok(());
+   }
+}
+
+#[repr(u8)]
+enum AddressAttributes{
+   Normal = 0x1,
+   Device = 0x2,
+   DevSharable = 0x4,
+   DevNonShare = 0x8,
+   ExecuteNever = 0x10,
+   StronglyOrdered = 0x20
+}
+
+pub struct MemPermission{
+   pub privileged: AccessPermission,
+   pub unprivileged: AccessPermission
+}
+
+impl Display for MemPermission{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+       write!(f,"privileged({:?}) :: unprivileged({:?})",&self.privileged,&self.unprivileged)
+    }
+}
+
+#[derive(Debug)]
+pub enum AccessPermission{
+   NoAccess,
+   ReadOnly,
+   ReadAndWrite
+}
+
+impl MemPermission{
+
+   #[inline]
+   pub fn full_access() ->Self{
+      Self{
+         privileged: AccessPermission::ReadAndWrite,
+         unprivileged: AccessPermission::ReadAndWrite
+      }
+   }
+
+   pub fn from_mpu_rasr(raw: u32)->Result<Self, ArmException>{
+      let perms = (raw & 0x03000000) >> 24;
+      match perms {
+         0b000 => Ok(Self { 
+            privileged: AccessPermission::NoAccess,
+            unprivileged: AccessPermission::NoAccess 
+         }),
+         0b001 => Ok(Self{
+            privileged: AccessPermission::ReadAndWrite,
+            unprivileged: AccessPermission::NoAccess,
+         }),
+         0b010 => Ok(Self{
+            privileged: AccessPermission::ReadAndWrite,
+            unprivileged: AccessPermission::ReadOnly
+         }),
+         0b011 => Ok(Self::full_access()),
+         0b100 => Err(ArmException::HardFault("AP value of 0x4 is undefined".into())),
+         0b101 => Ok(Self{
+            privileged: AccessPermission::ReadAndWrite,
+            unprivileged: AccessPermission::NoAccess
+         }),
+         0b110 | 0b111 => Ok(Self{
+            privileged: AccessPermission::ReadOnly,
+            unprivileged: AccessPermission::ReadOnly
+         }),
+         _ => unreachable!(),
+      }
+   }
+}
+
+fn is_region_ppb(v_addr: u32)->bool{
+   match v_addr{
+      0xE0000000 ..= 0xE00FFFFF => true,
+      _ => false
+   }
+}
+
+#[derive(Debug)]
+pub enum Access{
+   READ,
+   WRITE,
+   Execute
+}
+
+fn default_address_map(v_addr: u32)-> u8{
+   match v_addr{
+      0x0 ..= 0x1FFFFFFF => AddressAttributes::Normal as u8,
+      0x20000000 ..= 0x3FFFFFFF => AddressAttributes::Normal as u8,
+      0x40000000 ..= 0x5FFFFFFF => AddressAttributes::Device as u8,
+      0x60000000 ..= 0x7FFFFFFF => AddressAttributes::Normal as u8,
+      0x80000000 ..= 0x9FFFFFFF => AddressAttributes::Normal as u8,
+      0xA0000000 ..= 0xBFFFFFFF => AddressAttributes::DevSharable as u8 | AddressAttributes::ExecuteNever as u8,
+      0xC0000000 ..= 0xDFFFFFFF => AddressAttributes::DevNonShare as u8 | AddressAttributes::ExecuteNever as u8,
+      0xE0000000 ..= 0xE00FFFFF => AddressAttributes::StronglyOrdered as u8 | AddressAttributes::ExecuteNever as u8,
+      0xE0100000 ..= 0xFFFFFFFF => AddressAttributes::ExecuteNever as u8
+   }
+}
+

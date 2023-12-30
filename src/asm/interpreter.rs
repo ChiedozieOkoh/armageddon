@@ -50,9 +50,9 @@ fn symbol_aware_disassemble(
          let instruction = match operands{
             Some(args) => {
                if code == Opcode::_16Bit(B16::CPS){
-                  format!("{}{}",INDENT,pretty_print(&args))
+                  format!("{}{:#010x}:{}{}",INDENT,byte_offset,INDENT,pretty_print(&args))
                }else{
-                  format!("{}{} {}",INDENT,code,pretty_print(&args))
+                  format!("{}{:#010x}:{}{} {}",INDENT,byte_offset,INDENT,code,pretty_print(&args))
                }
             },
             None => format!("{}{}",INDENT,code)
@@ -86,13 +86,13 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String
             2 => {
                let short: [u8;2] = [pool[0],pool[1]];
                let hw = from_arm_bytes_16b(short);
-               line.push_str(&format!("{}{:#x}: .2byte {:#x}",INDENT,byte_offset,hw));
+               line.push_str(&format!("{}{:#010x}: .2byte {:#x}",INDENT,byte_offset,hw));
                line
             },
             4 => {
                let word: [u8;4] = [pool[0],pool[1],pool[2],pool[3]];
                let wrd = from_arm_bytes(word);
-               line.push_str(&format!("{}{:#x}: .4byte {:#x}",INDENT,byte_offset,wrd));
+               line.push_str(&format!("{}{:#010x}: .4byte {:#x}",INDENT,byte_offset,wrd));
                line
             }
             _ => {
@@ -101,7 +101,7 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String
                   if i != 0 {
                      let inner_symbol = sym_table.progressive_lookup(byte_offset + i);
                      if inner_symbol.is_some(){
-                        line.push_str(&format!("\n{:#010x} <",byte_offset + i));
+                        line.push_str(&format!("\n{:#010x}: <",byte_offset + i));
                         line.push_str(inner_symbol.unwrap());
                         line.push_str(">:");
                      }
@@ -112,7 +112,7 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String
                         line.push('\n');
                      }
                      line.push_str(INDENT);
-                     line.push_str(&format!("{:#x}: ",byte_offset + i));
+                     line.push_str(&format!("{:#010x}: ",byte_offset + i));
                      line.push_str(".byte".into());
                   }
                   line.push_str(&format!(" {:#04x} ",b));
@@ -150,13 +150,13 @@ pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<(usize, Str
             2 => {
                let short: [u8;2] = [pool[0],pool[1]];
                let hw = from_arm_bytes_16b(short);
-               line.push_str(&format!("{}{:#x}: .2byte {:#x}",INDENT,byte_offset,hw));
+               line.push_str(&format!("{}{:#010x}:{}.2byte {:#x}",INDENT,byte_offset,INDENT,hw));
                line
             },
             4 => {
                let word: [u8;4] = [pool[0],pool[1],pool[2],pool[3]];
                let wrd = from_arm_bytes(word);
-               line.push_str(&format!("{}{:#x}: .4byte {:#x}",INDENT,byte_offset,wrd));
+               line.push_str(&format!("{}{:#010x}:{}.4byte {:#x}",INDENT,byte_offset,INDENT,wrd));
                line
             }
             _ => {
@@ -165,7 +165,7 @@ pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<(usize, Str
                   if i != 0 {
                      let inner_symbol = sym_table.progressive_lookup(byte_offset + i);
                      if inner_symbol.is_some(){
-                        line.push_str(&format!("\n{:#010x} <",byte_offset + i));
+                        line.push_str(&format!("\n{:#010x}: <",byte_offset + i));
                         line.push_str(inner_symbol.unwrap());
                         line.push_str(">:");
                      }
@@ -176,7 +176,7 @@ pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<(usize, Str
                         line.push('\n');
                      }
                      line.push_str(INDENT);
-                     line.push_str(&format!("{:#x}: ",byte_offset + i));
+                     line.push_str(&format!("{:#010x}:{}",byte_offset + i,INDENT));
                      line.push_str(".byte".into());
                   }
                   line.push_str(&format!(" {:#04x} ",b));

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::binutils::from_arm_bytes;
 use crate::system::instructions::{zero_flag, negative_flag, carry_flag, overflow_flag};
+use crate::system::registers::{get_overflow_bit, get_carry_bit};
 use crate::tests::asm::{write_asm, asm_file_to_elf, asm_file_to_elf_armv6m};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
 use crate::system::{ArmException, System};
@@ -177,6 +178,8 @@ pub fn should_do_mul()->Result<(),std::io::Error>{
          sys.step()?;
 
          assert_eq!(sys.registers.generic[0], 21);
+         assert!(!negative_flag(sys.xpsr));
+         assert!(!zero_flag(sys.xpsr));
          return Ok(());
       }
    )?;
@@ -299,6 +302,87 @@ pub fn should_do_compare()->Result<(),std::io::Error>{
 }
 
 #[test]
+pub fn should_do_shifts()->Result<(), std::io::Error>{
+   let code = b".thumb
+      .text
+         MOV r0,#20
+         LSL r0,r0,#2
+         MOV r1,#1
+         MOV r3,r0
+         LSL r3,r1
+         MOV r5,#124
+         LSR r5,r5,#4
+         MOV r6,#2
+         LSR r5,r6
+         MOV r0,#1
+         LSR r0,#1
+         MOV r0,#1
+         LSL r0,#31
+         LSL r0,#1
+      ";
+
+   run_assembly_armv6m(
+      Path::new("sim_shift.s"),
+      code,
+      |entry_point, bin|{
+         let mut sys = load_code_into_system(entry_point, bin)?;
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[0],20 << 2);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[3],20 << 3);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[5],124 >> 4);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[5],124 >> 6);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[0],0);
+         assert!(get_carry_bit(sys.xpsr));
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[0],1 << 31);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[0],0);
+         assert!(get_carry_bit(sys.xpsr));
+         Ok(())
+      }
+   )?;
+   return Ok(());
+}
+
+#[test]
 pub fn should_support_stack()->Result<(), std::io::Error>{
    let bin_size = 1024;
    let code = b".thumb
@@ -386,7 +470,8 @@ fn run_euclid(r0_value: u32, r1_value: u32)->Result<(u32,u32), std::io::Error>{
       .less:
          SUB r1,r1,r0
          B _gcd
-      .end:";
+      .end:
+         NOP";
    let res =  run_assembly(
       Path::new("sim_euclid.s"),
       code, 
@@ -470,9 +555,11 @@ pub fn should_load()->Result<(),std::io::Error>{
    b".thumb
    .text
       LDR r0, =_some_var 
+      LDR r1,[r0]
       NOP
       NOP
       NOP
+      .pool
       _some_var: .word 0xBEEF
    ";
    run_assembly(
@@ -481,13 +568,18 @@ pub fn should_load()->Result<(),std::io::Error>{
       |entry_point, binary|{
          let mut sys = load_code_into_system(entry_point, binary)?;
          println!("mem: [{:?}]",sys.memory);
-         sys.step()?;
+         let off = sys.step()?;
          let beef_ptr = sys.registers.generic[0]; 
 
          let word: [u8;4] = sys.memory[beef_ptr as usize .. beef_ptr as usize + 4]
             .try_into()
             .unwrap();
          assert_eq!(0xBEEF_u32,from_arm_bytes(word));
+
+         sys.offset_pc(off)?;
+         sys.step()?;
+
+         assert_eq!(sys.registers.generic[1],0xBEEF_u32);
          return Ok(());
       }
    )?;

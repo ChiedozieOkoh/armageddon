@@ -69,7 +69,7 @@ impl <const L: u32> std::fmt::Display for  BitField<L>{
 
 impl <const L: u32> std::fmt::Debug for  BitField<L>{
    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-      write!(f,"<w:{}>#{}",L,self.0)
+      write!(f,"|{}bit|#{}",L,self.0)
    }
 }
 

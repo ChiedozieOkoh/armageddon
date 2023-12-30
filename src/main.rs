@@ -17,10 +17,12 @@ use crate::asm::interpreter::print_assembly;
 use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_entry_point_offset, get_all_symbol_names};
 use crate::system::System;
 use crate::ui::App;
+
+//TODO diassemble entire binary not just text section, load other segments into system
 fn main() {
    gui_diasm();
+   //cli_disasm();
 }
-
 
 fn gui_diasm(){
    let args: Vec<String> = std::env::args().collect();
@@ -35,7 +37,8 @@ fn gui_diasm(){
    exit_on_err(&maybe_instructions);
 
    let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
-   let sys = System::create_from_text(instructions);
+   let mut sys = System::create_from_text(instructions);
+   sys.set_pc(entry_point).unwrap();
    let flags = (sys,entry_point,symbol_map);
    App::run(iced::Settings::with_flags(flags)).unwrap();
 }
