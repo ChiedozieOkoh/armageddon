@@ -38,10 +38,12 @@ fn gui_diasm(){
 
    let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
    let mut sys = System::create_from_text(instructions);
+   println!("sys memory image: 0 -> {}",sys.memory.len());
    sys.set_pc(entry_point).unwrap();
    let flags = (sys,entry_point,symbol_map);
    App::run(iced::Settings::with_flags(flags)).unwrap();
 }
+
 fn cli_disasm(){
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{

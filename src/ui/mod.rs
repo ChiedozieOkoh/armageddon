@@ -1,6 +1,9 @@
-use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet}, Application, Theme, executor, Command, Element};
+use std::fmt::Display;
 
-use crate::{system::System, asm::interpreter::{print_assembly, disasm_text}};
+use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list}, Application, Theme, executor, Command, Element};
+use iced::widget::text_input;
+
+use crate::{system::{System, ArmException, simulator::HaltType}, asm::interpreter::{print_assembly, disasm_text}};
 
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
@@ -12,7 +15,45 @@ pub struct App{
    pub system: System,
    entry_point: usize,
    pub disasm: String,
-   symbols: Vec<(usize,String)>
+   symbols: Vec<(usize,String)>,
+   mem_view: Option<MemoryView>
+}
+
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub enum Cast{
+   UWORD,
+   IWORD,
+   UHALF,
+   IHALF,
+   UBYTE,
+   IBYTE
+}
+
+static CAST_OPTIONS: &[Cast] = &[Cast::UWORD, Cast::IWORD, Cast::UHALF, Cast::IHALF, Cast::UBYTE, Cast::IBYTE];
+
+impl Display for Cast{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+       let rep = match self{
+          Cast::UWORD => "u32",
+          Cast::IWORD => "i32",
+          Cast::UHALF => "u16",
+          Cast::IHALF => "i16",
+          Cast::UBYTE => "u8",
+          Cast::IBYTE => "i8",
+       };
+       write!(f,"{}",rep)
+    }
+}
+struct MemoryView{
+   pub start: u32, 
+   pub end: u32,
+   pub cast: Cast
+}
+
+impl Default for MemoryView{
+    fn default() -> Self {
+        Self{start: 0, end: 0xFFFF, cast: Cast::UBYTE}
+    }
 }
 
 fn user_cmds<'a>()->Element<'a, Event>{
@@ -27,6 +68,8 @@ fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
       button(text("D>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::Disassembler,pane_grid::Axis::Vertical))),
       button(text("D^")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::Disassembler,pane_grid::Axis::Horizontal))),
       button(text("R>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::SystemState,pane_grid::Axis::Vertical))),
+      button(text("M>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Vertical))),
+      button(text("M^")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Horizontal))),
       if n_panes > 1{
          button(text("X")).on_press(Event::Ui(Gui::ClosePane(pane)))
       }else{
@@ -143,10 +186,40 @@ fn pane_render<'a>(
             app.system.read_raw_ir(),
             from_arm_bytes(app.system.xpsr)
          );
-         text(str_state).size(TEXT_SIZE).width(iced::Length::Fill).into()
+         scrollable(text(str_state).size(TEXT_SIZE)).width(iced::Length::Fill).height(iced::Length::Fill).into()
       },
 
-      _ => todo!()
+      PaneType::MemoryExplorer => {
+         let view = app.mem_view.as_ref().unwrap_or_else(|| &MemoryView{start: 0,end: 0xFFFF, cast: Cast::UBYTE});
+         let inputs = row(vec![
+            text_input("start (hex)",&format!("{:#010x}",view.start))
+               .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetStart(s))))
+               .on_submit(Event::Ui(Gui::Exp(Explorer::Update)))
+               .into(),
+
+            text_input("end (hex)",&format!("{:#010x}",view.end))
+               .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetEnd(s))))
+               .on_submit(Event::Ui(Gui::Exp(Explorer::Update)))
+               .into(),
+
+            pick_list(CAST_OPTIONS, Some(view.cast.clone()), |c| Event::Ui(Gui::Exp(Explorer::SetCast(c))))
+               .into()
+         ]);
+         let start = std::cmp::min(app.system.memory.len() - 2,view.start as usize);
+         let end = std::cmp::min(app.system.memory.len() - 1,view.end as usize);
+         let real_start = std::cmp::min(start,end);
+         let real_end = std::cmp::max(start,end);
+
+         let data = &app.system.memory[real_start ..= real_end];
+         let text_box = scrollable(text(&format!("{:?}",data)).size(TEXT_SIZE).width(iced::Length::Fill));
+
+         container(
+            column![
+               inputs,
+               text_box
+            ]
+         ).width(iced::Length::Fill).height(iced::Length::Fill).into()
+      }
    }
 }
 
@@ -183,7 +256,8 @@ impl Application for App{
          system: sys,
          disasm: msg,
          entry_point,
-         symbols
+         symbols,
+         mem_view: None,
       },Command::none())
    }
 
@@ -204,6 +278,39 @@ impl Application for App{
             self._state.close(&pane);
             self.n_panes -= 1;
          },
+         Event::Ui(Gui::Exp(Explorer::Update)) => { },
+         Event::Ui(Gui::Exp(Explorer::SetStart(s))) => {
+            match parse_hex(&s){
+               Some(v) => {
+                  match self.mem_view{
+                    Some(ref mut current) => current.start = v,
+                    None => {
+                       let mut new_view = MemoryView::default();
+                       new_view.start = v;
+                       new_view.end = if v == u32::MAX{ u32::MAX }else{ v + 1 };
+                       self.mem_view = Some(new_view);
+                    },
+                }
+               },
+               None => {}
+            }
+         },
+         Event::Ui(Gui::Exp(Explorer::SetEnd(e))) => {
+            match parse_hex(&e){
+               Some(v) => {
+                  match self.mem_view{
+                    Some(ref mut current) => current.end = v,
+                    None => {
+                       let mut new_view = MemoryView::default();
+                       new_view.end = v;
+                       new_view.start = if v == 0 {0}else{ v - 1 };
+                       self.mem_view = Some(new_view);
+                    },
+                }
+               },
+               None => {}
+            }
+         }
          Event::Dbg(Debug::Step) => {
             match self.system.step(){
                Ok(offset) => {
@@ -240,11 +347,12 @@ impl Application for App{
 
 #[derive(Debug,Clone)]
 pub enum Debug{
-   Halt,
+   Halt(HaltType),
    Continue,
    Step,
-   CreateBreakpoint(usize),
-   DeleteBreakpoint(usize)
+   Disconnect,
+   CreateBreakpoint(u32),
+   DeleteBreakpoint(u32)
 }
 
 #[derive(Debug,Clone)]
@@ -252,6 +360,15 @@ pub enum Gui{
    SplitPane(pane_grid::Pane,PaneType,pane_grid::Axis),
    ResizePane(pane_grid::ResizeEvent),
    ClosePane(pane_grid::Pane),
+   Exp(Explorer),
+}
+
+#[derive(Debug,Clone)]
+pub enum Explorer{
+   SetStart(String),
+   SetEnd(String),
+   SetCast(Cast),
+   Update,
 }
 
 #[derive(Debug,Clone)]
@@ -265,4 +382,16 @@ pub enum PaneType{
    Disassembler,
    SystemState,
    MemoryExplorer
+}
+
+fn parse_hex(hex: &str)->Option<u32>{
+   match hex.trim().strip_prefix("0x"){
+      Some(h) => {
+         match u32::from_str_radix(h,16){
+            Ok(v) => Some(v),
+            Err(_) => {println!("could not parse {}",hex);None}
+         }
+      },
+      None => None
+   }
 }

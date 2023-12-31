@@ -8,8 +8,10 @@ use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,
 
 use self::instructions::{cond_passed, shift_left, shift_right};
 use self::registers::{Registers, Apsr, SpecialRegister, get_overflow_bit};
+
 pub mod registers;
 pub mod instructions;
+pub mod simulator;
 
 pub const TRACED_VARIABLES: usize = 8;
 
@@ -310,9 +312,17 @@ impl System{
    pub fn on_breakpoint(&self)->bool{
       self.breakpoints.contains(&self.registers.pc)
    }
+
    #[inline]
    pub fn add_breakpoint(&mut self, addr: u32){
-      self.breakpoints.push(addr as usize);
+      if !self.breakpoints.contains(&(addr as usize)){
+         self.breakpoints.push(addr as usize);
+      }
+   }
+
+   #[inline]
+   pub fn remove_breakpoint(&mut self,addr: u32){
+      self.breakpoints.retain(|brkpt| *brkpt != (addr as usize));
    }
 
    pub fn step(&mut self)->Result<i32, ArmException>{
@@ -321,6 +331,7 @@ impl System{
       match instr_size{
          InstructionSize::B16 => {
             let code = Opcode::from(maybe_code);
+            println!("{}",code);
             match code {
                Opcode::_16Bit(B16::ADD_Imm3)=>{
                   let (dest, src, imm3) = unpack_operands!(
@@ -329,7 +340,7 @@ impl System{
                      a,b,c
                   );
 
-                  println!("executing {}, {}{}{}",code,dest,src,imm3);
+                  //println!("executing {}, {}{}{}",code,dest,src,imm3);
                   let (sum,flags) = add_immediate(
                      self.registers.generic[src.0 as usize],
                      imm3.0
@@ -352,7 +363,7 @@ impl System{
                      imm8.0
                   );
 
-                  println!("executing {}, {}{}",code,dest,imm8);
+                  //println!("executing {}, {}{}",code,dest,imm8);
                   self.registers.generic[dest.0 as usize] = sum;
                   self.update_apsr(&flags);
                   return Ok(instr_size.in_bytes() as i32);
@@ -365,7 +376,7 @@ impl System{
                      a,b,c
                   );
 
-                  println!("executing {}, {}{}",code,src,arg);
+                  //println!("executing {}, {}{}",code,src,arg);
                   let (sum,flags) = add_immediate(
                      self.registers.generic[src.0 as usize],
                      self.registers.generic[arg.0 as usize]
