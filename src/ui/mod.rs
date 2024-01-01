@@ -16,7 +16,11 @@ pub struct App{
    entry_point: usize,
    pub disasm: String,
    symbols: Vec<(usize,String)>,
-   mem_view: Option<MemoryView>
+   mem_view: Option<MemoryView>,
+   view_error: Option<String>,
+   pending_mem_start: String,
+   pending_mem_end: String,
+   update_view: bool
 }
 
 #[derive(Clone,Debug,PartialEq,Eq)]
@@ -192,12 +196,12 @@ fn pane_render<'a>(
       PaneType::MemoryExplorer => {
          let view = app.mem_view.as_ref().unwrap_or_else(|| &MemoryView{start: 0,end: 0xFFFF, cast: Cast::UBYTE});
          let inputs = row(vec![
-            text_input("start (hex)",&format!("{:#010x}",view.start))
+            text_input("start (hex)",&app.pending_mem_start)
                .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetStart(s))))
                .on_submit(Event::Ui(Gui::Exp(Explorer::Update)))
                .into(),
 
-            text_input("end (hex)",&format!("{:#010x}",view.end))
+            text_input("end (hex)",&app.pending_mem_end)
                .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetEnd(s))))
                .on_submit(Event::Ui(Gui::Exp(Explorer::Update)))
                .into(),
@@ -211,7 +215,16 @@ fn pane_render<'a>(
          let real_end = std::cmp::max(start,end);
 
          let data = &app.system.memory[real_start ..= real_end];
-         let text_box = scrollable(text(&format!("{:?}",data)).size(TEXT_SIZE).width(iced::Length::Fill));
+         //println!("should update view {}",app.update_view);
+         let text_box = if app.view_error.is_some(){
+               scrollable(text(app.view_error.as_ref().unwrap()).size(TEXT_SIZE).width(iced::Length::Fill))
+            }else{
+               if app.update_view{
+                  scrollable(text(&format!("{:?}",data)).size(TEXT_SIZE).width(iced::Length::Fill))
+               }else{
+                  scrollable(text("... press enter to update view").size(TEXT_SIZE).width(iced::Length::Fill))
+               }
+         };
 
          container(
             column![
@@ -258,6 +271,10 @@ impl Application for App{
          entry_point,
          symbols,
          mem_view: None,
+         pending_mem_start: "start (hex)".into(),
+         pending_mem_end: "end (hex)".into(),
+         update_view: false,
+         view_error: None
       },Command::none())
    }
 
@@ -278,9 +295,9 @@ impl Application for App{
             self._state.close(&pane);
             self.n_panes -= 1;
          },
-         Event::Ui(Gui::Exp(Explorer::Update)) => { },
-         Event::Ui(Gui::Exp(Explorer::SetStart(s))) => {
-            match parse_hex(&s){
+
+         Event::Ui(Gui::Exp(Explorer::Update)) => { 
+            match parse_hex(&self.pending_mem_start){
                Some(v) => {
                   match self.mem_view{
                     Some(ref mut current) => current.start = v,
@@ -290,13 +307,17 @@ impl Application for App{
                        new_view.end = if v == u32::MAX{ u32::MAX }else{ v + 1 };
                        self.mem_view = Some(new_view);
                     },
-                }
+                  }
+                  self.update_view = true;
+                  self.view_error = None;
                },
-               None => {}
+               None => {
+                  println!("should report error");
+                  self.view_error = Some(format!("could not parse '{}' as a hexadecimal",&self.pending_mem_start));
+               }
             }
-         },
-         Event::Ui(Gui::Exp(Explorer::SetEnd(e))) => {
-            match parse_hex(&e){
+
+            match parse_hex(&self.pending_mem_end){
                Some(v) => {
                   match self.mem_view{
                     Some(ref mut current) => current.end = v,
@@ -306,11 +327,26 @@ impl Application for App{
                        new_view.start = if v == 0 {0}else{ v - 1 };
                        self.mem_view = Some(new_view);
                     },
-                }
+                  }
+                  self.update_view = true;
+                  self.view_error = None;
                },
-               None => {}
+               None => {
+                  println!("should report error");
+                  self.view_error = Some(format!("could not parse '{}' as a hexadecimal",&self.pending_mem_end));
+               }
             }
-         }
+         },
+
+         Event::Ui(Gui::Exp(Explorer::SetStart(s))) => {
+            self.pending_mem_start = s;
+            self.update_view = false;
+         },
+
+         Event::Ui(Gui::Exp(Explorer::SetEnd(e))) => {
+            self.pending_mem_end = e;
+            self.update_view = false;
+         },
          Event::Dbg(Debug::Step) => {
             match self.system.step(){
                Ok(offset) => {
@@ -385,13 +421,20 @@ pub enum PaneType{
 }
 
 fn parse_hex(hex: &str)->Option<u32>{
-   match hex.trim().strip_prefix("0x"){
-      Some(h) => {
-         match u32::from_str_radix(h,16){
-            Ok(v) => Some(v),
-            Err(_) => {println!("could not parse {}",hex);None}
-         }
-      },
-      None => None
+   if hex.starts_with("0x"){
+      match hex.trim().strip_prefix("0x"){
+         Some(h) => {
+            match u32::from_str_radix(h,16){
+               Ok(v) => Some(v),
+               Err(_) => {println!("could not parse {}",hex);None}
+            }
+         },
+         None => None
+      }
+   }else{
+      match u32::from_str_radix(hex,16){
+         Ok(v) => Some(v),
+         Err(_) => {println!("could not parse {}",hex);None}
+      }
    }
 }
