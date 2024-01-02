@@ -3,7 +3,7 @@ use std::fmt::Display;
 use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list}, Application, Theme, executor, Command, Element};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::HaltType}, asm::interpreter::{print_assembly, disasm_text}};
+use crate::{system::{System, ArmException, simulator::HaltType}, asm::interpreter::{print_assembly, disasm_text}, binutils::from_arm_bytes_16b};
 
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
@@ -33,6 +33,50 @@ pub enum Cast{
    IBYTE
 }
 
+fn stringify_slice(arr: &[u8],cast: Cast)->String{
+   let mut display = String::new();
+   match cast{
+      Cast::UWORD => {
+         for word in arr.chunks_exact(4){
+            let byte_pair: [u8;4] = word.try_into().expect("always 4 byte arr");
+            let native = from_arm_bytes(byte_pair);
+            display.push_str(&(native).to_string());
+            display.push(' ');
+         }
+      },
+      Cast::IWORD => {
+         for word in arr.chunks_exact(4){
+            let byte_pair: [u8;4] = word.try_into().expect("always 4 byte arr");
+            let native = from_arm_bytes(byte_pair);
+            display.push_str(&(native as i32).to_string());
+            display.push(' ');
+         }
+      },
+      Cast::UHALF => {
+         for hw in arr.chunks_exact(2){
+            let byte_pair: [u8;2] = hw.try_into().expect("always 2 byte arr");
+            let native = from_arm_bytes_16b(byte_pair);
+            display.push_str(&(native).to_string());
+            display.push(' ');
+         }
+     },
+      Cast::IHALF => for hw in arr.chunks_exact(2){
+         let byte_pair: [u8;2] = hw.try_into().expect("always 2 byte arr");
+         let native = from_arm_bytes_16b(byte_pair);
+         display.push_str(&(native as i16).to_string());
+         display.push(' ');
+      },
+      Cast::UBYTE => display = format!("{:?}",arr),
+      Cast::IBYTE => {
+         for byte in arr{
+            display.push_str(&(*byte as i8).to_string());
+            display.push(' ');
+         }
+      },
+   }
+   display
+}
+
 static CAST_OPTIONS: &[Cast] = &[Cast::UWORD, Cast::IWORD, Cast::UHALF, Cast::IHALF, Cast::UBYTE, Cast::IBYTE];
 
 impl Display for Cast{
@@ -48,6 +92,7 @@ impl Display for Cast{
        write!(f,"{}",rep)
     }
 }
+
 struct MemoryView{
    pub start: u32, 
    pub end: u32,
@@ -141,6 +186,15 @@ fn pane_render<'a>(
                               })
                            );
                            un_highlighted.clear();
+
+                        }else if app.system.is_breakpoint(add_v){
+                           text_box = text_box.push(
+                              text(&un_highlighted)
+                              .size(TEXT_SIZE)
+                              .width(iced::Length::Fill)
+                           );
+                           un_highlighted.clear();
+                           text_box = text_box.push(container(text(line).size(TEXT_SIZE)).style(brkpt_theme));
                         }else{
                            un_highlighted.push_str(line);
                            un_highlighted.push('\n');
@@ -220,7 +274,8 @@ fn pane_render<'a>(
                scrollable(text(app.view_error.as_ref().unwrap()).size(TEXT_SIZE).width(iced::Length::Fill))
             }else{
                if app.update_view{
-                  scrollable(text(&format!("{:?}",data)).size(TEXT_SIZE).width(iced::Length::Fill))
+                  let string_data = stringify_slice(data, view.cast.clone());
+                  scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
                }else{
                   scrollable(text("... press enter to update view").size(TEXT_SIZE).width(iced::Length::Fill))
                }
@@ -233,6 +288,17 @@ fn pane_render<'a>(
             ]
          ).width(iced::Length::Fill).height(iced::Length::Fill).into()
       }
+   }
+}
+
+fn brkpt_theme(theme: &Theme)->container::Appearance{
+   let palette = theme.extended_palette();
+   container::Appearance{
+      background: Some(iced::Background::Color(iced::Color{r: 0.0, g: 0.0, b: 1.0, a: 0.0})),
+      text_color: Some(iced::Color{r: 0.0, g: 0.0, b: 0.0, a: 0.0}),
+      border_width: 10.0,
+      border_color: palette.background.strong.color,
+      ..Default::default()
    }
 }
 
@@ -346,6 +412,17 @@ impl Application for App{
          Event::Ui(Gui::Exp(Explorer::SetEnd(e))) => {
             self.pending_mem_end = e;
             self.update_view = false;
+         },
+
+         Event::Ui(Gui::Exp(Explorer::SetCast(c))) => {
+            match self.mem_view{
+               Some(ref mut current) => current.cast = c,
+               None => {
+                  let mut new_view = MemoryView::default();
+                  new_view.cast = c;
+                  self.mem_view = Some(new_view);
+               },
+            }
          },
          Event::Dbg(Debug::Step) => {
             match self.system.step(){

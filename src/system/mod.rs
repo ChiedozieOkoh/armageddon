@@ -321,6 +321,11 @@ impl System{
    }
 
    #[inline]
+   pub fn is_breakpoint(&self, addr: u32)->bool{
+      self.breakpoints.contains(&(addr as usize))
+   }
+
+   #[inline]
    pub fn remove_breakpoint(&mut self,addr: u32){
       self.breakpoints.retain(|brkpt| *brkpt != (addr as usize));
    }
@@ -740,6 +745,7 @@ impl System{
                   let addr = base_v + offset.0;
                   let val = self.registers.generic[v_reg.0 as usize];
 
+                  println!("*(&int({:#x})) := {}",addr,val);
                   write_memory::<4>(self, addr, into_arm_bytes(val))?;
                   return Ok(instr_size.in_bytes() as i32);
                },
