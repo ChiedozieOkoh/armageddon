@@ -8,6 +8,10 @@ pub struct SymbolTable<'a>{
    cursor: usize
 }
 
+pub fn is_segment_mapping_symbol(symbol: &str)->bool{
+   symbol.eq("$d") || symbol.eq("$t")
+}
+
 impl<'a> SymbolTable<'a>{
    pub fn create(symbols: &'a Vec<(usize, String)>)->Self{
       Self{symbols, cursor: 0}

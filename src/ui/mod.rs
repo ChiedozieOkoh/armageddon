@@ -3,7 +3,7 @@ use std::fmt::Display;
 use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list}, Application, Theme, executor, Command, Element};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::HaltType}, asm::interpreter::{print_assembly, disasm_text}, binutils::from_arm_bytes_16b};
+use crate::{system::{System, ArmException, simulator::HaltType}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b};
 
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
@@ -20,7 +20,30 @@ pub struct App{
    view_error: Option<String>,
    pending_mem_start: String,
    pending_mem_end: String,
-   update_view: bool
+   update_view: bool,
+   bkpt_input: BkptInput
+}
+
+struct BkptInput{
+   pub pending_addr_or_symbol: String,  
+}
+
+impl BkptInput{
+   pub fn try_get_addr(&self, symbols: &Vec<(usize,String)>)->Option<u32>{
+      match parse_hex(&self.pending_addr_or_symbol){
+         Some(addr) => Some(addr),
+         None => {
+            let treated = self.pending_addr_or_symbol.trim();
+            for (addr, symbol) in symbols{
+               if symbol.eq(treated) && !is_segment_mapping_symbol(symbol){
+                  return Some(*addr as u32);
+               }
+            }
+            println!("could not identify symbol: {}",self.pending_addr_or_symbol);
+            return None;
+         },
+      }
+   }
 }
 
 #[derive(Clone,Debug,PartialEq,Eq)]
@@ -105,10 +128,14 @@ impl Default for MemoryView{
     }
 }
 
-fn user_cmds<'a>()->Element<'a, Event>{
+fn user_cmds<'a>(bkpt: &BkptInput)->Element<'a, Event>{
+   let bkpt_button = text_input("toggle breakpoint at address / symbol", &bkpt.pending_addr_or_symbol)
+      .on_input(|s|Event::Ui(Gui::SetBkptInput(s)))
+      .on_submit(Event::Ui(Gui::SubmitBkpt));
    row![
       button(text("step").size(TEXT_SIZE)).on_press(Event::Dbg(Debug::Step)),
-      button(text("continue").size(TEXT_SIZE)).on_press(Event::Dbg(Debug::Continue))
+      button(text("continue").size(TEXT_SIZE)).on_press(Event::Dbg(Debug::Continue)),
+      bkpt_button
    ].spacing(5).into()
 }
 
@@ -188,13 +215,15 @@ fn pane_render<'a>(
                            un_highlighted.clear();
 
                         }else if app.system.is_breakpoint(add_v){
-                           text_box = text_box.push(
-                              text(&un_highlighted)
-                              .size(TEXT_SIZE)
-                              .width(iced::Length::Fill)
-                           );
+                           if !un_highlighted.trim().is_empty(){
+                              text_box = text_box.push(
+                                 text(&un_highlighted)
+                                 .size(TEXT_SIZE)
+                                 .width(iced::Length::Fill)
+                              );
+                           }
                            un_highlighted.clear();
-                           text_box = text_box.push(container(text(line).size(TEXT_SIZE)).style(brkpt_theme));
+                           text_box = text_box.push(container(text(line).size(TEXT_SIZE)).style(brkpt_theme).padding(0));
                         }else{
                            un_highlighted.push_str(line);
                            un_highlighted.push('\n');
@@ -294,8 +323,8 @@ fn pane_render<'a>(
 fn brkpt_theme(theme: &Theme)->container::Appearance{
    let palette = theme.extended_palette();
    container::Appearance{
-      background: Some(iced::Background::Color(iced::Color{r: 0.0, g: 0.0, b: 1.0, a: 0.0})),
-      text_color: Some(iced::Color{r: 0.0, g: 0.0, b: 0.0, a: 0.0}),
+      background: Some(iced::Background::Color(iced::color!(30,100,200))),
+      text_color: Some(iced::color!(0,0,0)),
       border_width: 10.0,
       border_color: palette.background.strong.color,
       ..Default::default()
@@ -340,7 +369,8 @@ impl Application for App{
          pending_mem_start: "start (hex)".into(),
          pending_mem_end: "end (hex)".into(),
          update_view: false,
-         view_error: None
+         view_error: None,
+         bkpt_input: BkptInput { pending_addr_or_symbol: String::new() }
       },Command::none())
    }
 
@@ -424,6 +454,23 @@ impl Application for App{
                },
             }
          },
+
+         Event::Ui(Gui::SetBkptInput(input)) => {
+            self.bkpt_input.pending_addr_or_symbol = input;
+         },
+
+         Event::Ui(Gui::SubmitBkpt) => {
+            match self.bkpt_input.try_get_addr(&self.symbols){
+                Some(addr) => {
+                   if self.system.is_breakpoint(addr){
+                      self.system.remove_breakpoint(addr);
+                   }else{
+                      self.system.add_breakpoint(addr);
+                   }
+                },
+                None => {},
+            }
+         }
          Event::Dbg(Debug::Step) => {
             match self.system.step(){
                Ok(offset) => {
@@ -444,12 +491,12 @@ impl Application for App{
       let layout = PaneGrid::new(&self._state, |id, pane, _maximised|{
          let title_bar = pane_grid::TitleBar::new("Armageddon").controls(pane_cmds(self.n_panes,id)).padding(10).style(focused_pane);
          pane_grid::Content::new(
-            column![user_cmds(),
-            pane_render(&self,pane)].padding(10)
+            pane_render(&self,pane)
          ).title_bar(title_bar)
       }.style(focused_pane))
       .on_resize(10,|e| Event::Ui(Gui::ResizePane(e)));
-      layout.into()
+      column![user_cmds(&self.bkpt_input),layout].into()
+      //layout.into()
     }
 }
 
@@ -474,6 +521,8 @@ pub enum Gui{
    ResizePane(pane_grid::ResizeEvent),
    ClosePane(pane_grid::Pane),
    Exp(Explorer),
+   SetBkptInput(String),
+   SubmitBkpt
 }
 
 #[derive(Debug,Clone)]
