@@ -33,6 +33,8 @@ impl SpecialRegister{
     }
    }
 }
+
+#[derive(Clone)]
 pub struct Registers{
    pub generic: [u32;13], //R0 -> R12
    pub sp_main: u32,

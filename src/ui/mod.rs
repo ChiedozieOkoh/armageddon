@@ -1,9 +1,9 @@
-use std::fmt::Display;
+use std::{fmt::Display, sync::{Mutex, Arc}, ops::Deref};
 
-use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list}, Application, Theme, executor, Command, Element};
+use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list}, Application, Theme, executor, Command, Element, futures::StreamExt};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::HaltType}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b};
+use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b};
 
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
@@ -12,16 +12,82 @@ pub struct App{
    _state: pane_grid::State<PaneType>,
    n_panes: usize,
    focus: Option<pane_grid::Pane>,
-   pub system: System,
    entry_point: usize,
    pub disasm: String,
    symbols: Vec<(usize,String)>,
    mem_view: Option<MemoryView>,
+   sys_view: SystemView,
+   sync_sys: Arc<Mutex<System>>,
+   cmd_sender: Option<iced_mpsc::Sender<Event>>,
+   breakpoints: Vec<u32>,
    view_error: Option<String>,
    pending_mem_start: String,
    pending_mem_end: String,
    update_view: bool,
    bkpt_input: BkptInput
+}
+
+struct SystemView{
+   pub registers: Registers,
+   pub sp: u32,
+   pub xpsr: u32,
+   pub raw_ir: u32
+}
+
+impl From<&System> for SystemView{
+   fn from(sys: &System) -> Self {
+      Self{
+         registers: sys.registers.clone(),
+         sp: sys.get_sp(),
+         xpsr: from_arm_bytes(sys.xpsr),
+         raw_ir: sys.read_raw_ir()
+      }
+   }
+}
+
+impl Display for SystemView{
+   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      write!(f,concat!(
+             "r0: {}\n",
+             "r1: {}\n",
+             "r2: {}\n",
+             "r3: {}\n",
+             "r4: {}\n",
+             "r5: {}\n", 
+             "r6: {}\n",
+             "r7: {}\n",
+             "r8: {}\n", 
+             "r9: {}\n",
+             "r10: {}\n",
+             "r11: {}\n",
+             "r12: {}\n",
+             "SP: {:#010x}\n",
+             "LR: {:#x}\n",
+             "PC: {:#x}\n",
+             "XPSR: {:#010x}",
+            ),
+            self.registers.generic[0],
+            self.registers.generic[1],
+            self.registers.generic[2],
+            self.registers.generic[3],
+            self.registers.generic[4],
+            self.registers.generic[5],
+            self.registers.generic[6],
+            self.registers.generic[7],
+            self.registers.generic[8],
+            self.registers.generic[9],
+            self.registers.generic[10],
+            self.registers.generic[11],
+            self.registers.generic[12],
+            self.sp,
+            self.registers.lr,
+            self.sp,
+            self.xpsr
+      )
+   }
+}
+
+struct MemoryByte{
 }
 
 struct BkptInput{
@@ -160,7 +226,7 @@ fn pane_render<'a>(
    )->Element<'a, Event>{
    match state{
       PaneType::Disassembler => {
-         let ir = app.system.read_raw_ir();
+         let ir = app.sys_view.raw_ir;
          let highlighted = app.disasm.lines().take(1).next().unwrap();
          let text_widget: iced::widget::Text<'a,iced::Renderer> = if highlighted.contains("<"){
             text(highlighted).size(TEXT_SIZE).style(iced::color!(100,0,0))
@@ -214,7 +280,7 @@ fn pane_render<'a>(
                            );
                            un_highlighted.clear();
 
-                        }else if app.system.is_breakpoint(add_v){
+                        }else if app.breakpoints.contains(&add_v){
                            if !un_highlighted.trim().is_empty(){
                               text_box = text_box.push(
                                  text(&un_highlighted)
@@ -253,26 +319,7 @@ fn pane_render<'a>(
       },
 
       PaneType::SystemState => {
-         let str_state = format!(
-            "r0: {}\nr1: {}\nr2: {}\nr3: {}\nr4: {}\nr5: {}\nr6: {}\nr7: {}\nr8: {}\nr9: {}\nr10: {}\nr11: {}\nr12: {}\nSP: {:#010x}\nLR: {:#x}\nPC: {:#x}\nXPSR: {:#010x}",
-            app.system.registers.generic[0],
-            app.system.registers.generic[1],
-            app.system.registers.generic[2],
-            app.system.registers.generic[3],
-            app.system.registers.generic[4],
-            app.system.registers.generic[5],
-            app.system.registers.generic[6],
-            app.system.registers.generic[7],
-            app.system.registers.generic[8],
-            app.system.registers.generic[9],
-            app.system.registers.generic[10],
-            app.system.registers.generic[11],
-            app.system.registers.generic[12],
-            app.system.get_sp(),
-            app.system.registers.lr,
-            app.system.read_raw_ir(),
-            from_arm_bytes(app.system.xpsr)
-         );
+         let str_state = format!("{}",app.sys_view);
          scrollable(text(str_state).size(TEXT_SIZE)).width(iced::Length::Fill).height(iced::Length::Fill).into()
       },
 
@@ -292,19 +339,27 @@ fn pane_render<'a>(
             pick_list(CAST_OPTIONS, Some(view.cast.clone()), |c| Event::Ui(Gui::Exp(Explorer::SetCast(c))))
                .into()
          ]);
-         let start = std::cmp::min(app.system.memory.len() - 2,view.start as usize);
-         let end = std::cmp::min(app.system.memory.len() - 1,view.end as usize);
-         let real_start = std::cmp::min(start,end);
-         let real_end = std::cmp::max(start,end);
-
-         let data = &app.system.memory[real_start ..= real_end];
          //println!("should update view {}",app.update_view);
          let text_box = if app.view_error.is_some(){
                scrollable(text(app.view_error.as_ref().unwrap()).size(TEXT_SIZE).width(iced::Length::Fill))
             }else{
                if app.update_view{
-                  let string_data = stringify_slice(data, view.cast.clone());
-                  scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
+                  match app.sync_sys.try_lock(){
+                    Ok(sys) => {
+                       let start = std::cmp::min(sys.memory.len() - 2,view.start as usize);
+                       let end = std::cmp::min(sys.memory.len() - 1,view.end as usize);
+                       let real_start = std::cmp::min(start,end);
+                       let real_end = std::cmp::max(start,end);
+
+                       let data = &sys.memory[real_start ..= real_end];
+                       let string_data = stringify_slice(data, view.cast.clone());
+                       scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
+                    },
+                    Err(_) => {
+                       println!("could not acquire dbg thread lock!!!");
+                       scrollable(text("...").size(TEXT_SIZE).width(iced::Length::Fill))
+                    },
+                }
                }else{
                   scrollable(text("... press enter to update view").size(TEXT_SIZE).width(iced::Length::Fill))
                }
@@ -352,6 +407,8 @@ impl Application for App{
       
       let (sys,entry_point, symbols) = args;
       let disasm = disasm_text(&sys.memory, entry_point, &symbols);
+      let starting_view: SystemView = (&sys).into();
+      let sync_sys_arc = Arc::new(Mutex::new(sys));
       let mut msg = String::new(); 
       for i in disasm.into_iter(){
          msg.push_str(&i);
@@ -361,11 +418,14 @@ impl Application for App{
          _state: state,
          n_panes: 1,
          focus: Some(first),
-         system: sys,
+         sync_sys: sync_sys_arc,
          disasm: msg,
          entry_point,
          symbols,
+         sys_view: starting_view,
+         cmd_sender: None,
          mem_view: None,
+         breakpoints: Vec::new(),
          pending_mem_start: "start (hex)".into(),
          pending_mem_end: "end (hex)".into(),
          update_view: false,
@@ -377,6 +437,88 @@ impl Application for App{
    fn title(&self) -> String {
         "Armageddon Simulator".into()
     }
+
+   fn subscription(&self) -> iced::Subscription<Self::Message> {
+      let async_copy = self.sync_sys.clone();
+      //assert_eq!(2,Arc::strong_count(&async_copy),"only one instance runs in continue mode, only one instance runs in step mode");
+      iced::subscription::channel(0, 1, |mut output| async move {
+         let (sndr, mut rcvr)  = iced_mpsc::channel(10);
+         output.send(Event::Dbg(Debug::Connect(sndr))).await;
+         let mut continue_mode = false;
+         let mut halt = None;
+         let mut exit = false;
+         loop{
+            match rcvr.select_next_some().await{
+                Event::Ui(e) => panic!("invalid cmd sent to simulator loop {:?}",e),
+                Event::Dbg(Debug::Halt(_)) => {
+                   continue_mode = false;
+                },
+
+                Event::Dbg(Debug::CreateBreakpoint(addr))=>{
+                   let mut sys = async_copy.lock().unwrap();
+                   sys.add_breakpoint(addr);
+                },
+
+                Event::Dbg(Debug::DeleteBreakpoint(addr))=>{
+                   let mut sys = async_copy.lock().unwrap();
+                   sys.remove_breakpoint(addr);
+                },
+
+                Event::Dbg(Debug::Disconnect) => {
+                   if !exit{
+                      exit = true;
+                   }
+                   if !output.is_closed(){
+                      output.close_channel();
+                   }
+                },
+                Event::Dbg(Debug::Continue) => {
+                   continue_mode = true;
+                   while continue_mode{
+                      let mut sys = async_copy.lock().unwrap();
+                      if sys.on_breakpoint(){
+                         continue_mode = false;
+                         halt = Some(HaltType::breakpoint);
+                      }else{
+                         match Simulator::step_or_signal_halt_type(&mut sys){
+                            Ok(_)=> {},
+                            Err(e) => {continue_mode = false; halt = Some(e);}
+                         }
+                      }
+                      match rcvr.try_next(){
+                         Ok(event) => match event{
+                            Some(eve) => match eve{
+                               Event::Dbg(Debug::Halt(_)) => {
+                                  continue_mode = false;
+                               },
+                               Event::Dbg(Debug::Disconnect) => {
+                                  continue_mode = false;
+                                  exit = true;
+                                  output.close_channel();
+                               },
+                               Event::Dbg(e) => {
+                                  panic!("invalid cmd {:?} sent to simulator loop", e)
+                               },
+                               Event::Ui(e) => {panic!("invalid cmd {:?} sent to sim loop", e)}
+                            },
+                            None => todo!(),
+                         },
+                         Err(_) => { },
+                      }
+                   }
+                },
+                Event::Dbg(e) => panic!("invalid cmd sent to simulator loop {:?}", e),
+            }
+            match halt{
+                Some(h) => {
+                   output.send(Event::Dbg(Debug::Halt(h))).await;
+                   halt = None;
+                },
+                None => {},
+            }
+         }
+      })
+   }
 
    fn update(&mut self, message: Event) -> Command<Self::Message> {
       match message{
@@ -462,24 +604,51 @@ impl Application for App{
          Event::Ui(Gui::SubmitBkpt) => {
             match self.bkpt_input.try_get_addr(&self.symbols){
                 Some(addr) => {
-                   if self.system.is_breakpoint(addr){
-                      self.system.remove_breakpoint(addr);
+                   if self.breakpoints.contains(&addr){
+                      match self.cmd_sender{
+                         Some(ref mut sndr) =>{
+                            sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
+                            self.breakpoints.retain(|x| *x != addr);
+                         },
+                         None => {panic!("cannot interact with dbg session")}
+                      }
                    }else{
-                      self.system.add_breakpoint(addr);
+                      match self.cmd_sender{
+                         Some(ref mut sndr)=>{
+                            sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
+                            self.breakpoints.push(addr);
+                         },
+                         None => {panic!("cannot interact with dbg session")}
+                      }
                    }
                 },
-                None => {},
+                None => {println!("could not parse {} as address",&self.bkpt_input.pending_addr_or_symbol)},
             }
-         }
+         },
+
          Event::Dbg(Debug::Step) => {
-            match self.system.step(){
-               Ok(offset) => {
-                  self.system.offset_pc(offset).unwrap();
+            let mut sys = self.sync_sys.try_lock().unwrap();
+            Simulator::step_or_signal_halt(&mut sys).unwrap();
+            self.sys_view = sys.deref().into();
+         },
+
+         Event::Dbg(Debug::Connect(sender)) => {
+            self.cmd_sender = Some(sender);
+            println!("connected with dbg thread");
+         },
+         Event::Dbg(Debug::Continue) => {
+            assert!(self.cmd_sender.is_some(),"cannot use continue dbg thread not connected");
+            match self.cmd_sender.as_mut(){
+               Some(sndr) => {
+                  sndr.try_send(Event::Dbg(Debug::Continue)).unwrap();
                },
-               Err(fault) => {
-                  panic!("{:?}",fault);
-               }
+               None => {},
             }
+         },
+         Event::Dbg(Debug::Halt(_type))=>{
+            println!("dbg session halted due to {:?}",_type);
+            let sys = self.sync_sys.try_lock().unwrap();
+            self.sys_view = sys.deref().into();
          }
          _ => todo!()
       }
@@ -505,6 +674,8 @@ impl Application for App{
    Delete(usize)
 }*/
 
+use iced::futures::channel::mpsc as iced_mpsc;
+use iced::futures::sink::SinkExt; 
 #[derive(Debug,Clone)]
 pub enum Debug{
    Halt(HaltType),
@@ -512,7 +683,8 @@ pub enum Debug{
    Step,
    Disconnect,
    CreateBreakpoint(u32),
-   DeleteBreakpoint(u32)
+   DeleteBreakpoint(u32),
+   Connect(iced_mpsc::Sender<Event>)
 }
 
 #[derive(Debug,Clone)]
@@ -552,7 +724,7 @@ fn parse_hex(hex: &str)->Option<u32>{
          Some(h) => {
             match u32::from_str_radix(h,16){
                Ok(v) => Some(v),
-               Err(_) => {println!("could not parse {}",hex);None}
+               Err(_) => {println!("could not parse {} as hex",hex);None}
             }
          },
          None => None
@@ -560,7 +732,7 @@ fn parse_hex(hex: &str)->Option<u32>{
    }else{
       match u32::from_str_radix(hex,16){
          Ok(v) => Some(v),
-         Err(_) => {println!("could not parse {}",hex);None}
+         Err(_) => {println!("could not parse {} as hex",hex);None}
       }
    }
 }
