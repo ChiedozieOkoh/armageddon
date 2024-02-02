@@ -158,6 +158,8 @@ pub struct SectionHeader{
 }
 
 
+pub const SHN_ABS: u16 = 0xfff1;
+
 #[repr(C,packed)]
 #[derive(Debug)]
 pub struct SymbolTableEntry{
@@ -192,6 +194,21 @@ fn has_no_type(symbol: &SymbolTableEntry) ->bool{
       false
    }
 }
+fn has_a_visible_type(symbol: &SymbolTableEntry)->bool{
+   let sym_type: Option<SymbolType> = symbol.into();
+   match sym_type{
+      Some(s_type) =>{
+         match s_type{
+            SymbolType::Notype | SymbolType::Func => true,
+            _ => false
+         }
+      },
+      None => {
+         println!("WARNING: Could not determine type of symbol from info {}",symbol.info);
+         false
+      }
+   }
+}
 
 impl From<&SymbolTableEntry> for Option<SymbolBinding>{
    fn from(symbol: &SymbolTableEntry) -> Self {
@@ -220,6 +237,7 @@ fn has_any_binding(symbol: &SymbolTableEntry) -> bool{
    return binding.is_some();
 }
 
+#[derive(Debug)]
 pub enum SymbolType{
    Notype = 0x0,
    Object = 0x1,
@@ -407,7 +425,7 @@ pub fn get_section_symbols(
 
    let local_symbols: Vec<SymbolTableEntry> = entries.into_iter()
       .filter(|e| 
-         has_no_type(e) 
+         has_a_visible_type(e) 
          && has_any_binding(e) 
          && to_native_endianness_32b(elf_header, &e.name_index) != 0)
       .collect();
@@ -433,23 +451,65 @@ pub fn get_text_section_symbols<'a>(
    }
 }
 
+#[derive(Debug)]
+pub struct SymbolDefinition{
+   pub position: usize,
+   pub name: String,
+   pub section_index: u16,
+   pub _type: SymbolType
+}
+
+impl Ord for SymbolDefinition{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+       if self.position != other.position{
+          self.position.cmp(&other.position)
+       }else{
+          self.section_index.cmp(&other.section_index)
+       }
+    }
+}
+
+impl PartialOrd for SymbolDefinition{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for SymbolDefinition{
+    fn eq(&self, other: &Self) -> bool {
+       self.position == other.position 
+          && self.section_index == other.section_index
+          && self.name.eq(&other.name)
+    }
+}
+
+impl Eq for SymbolDefinition{}
+
 pub fn get_all_symbol_names(
    reader: &mut BufReader<File>,
    elf_header: &ElfHeader,
    sym_entries: &Vec<SymbolTableEntry>,
    str_table_hdr: &SectionHeader,
-   )->Result<Vec<(usize,String)>,ElfError>{
+   )->Result<Vec<SymbolDefinition>,ElfError>{
 
    let names = get_matching_sym_in_place(reader, elf_header, sym_entries, str_table_hdr)?;
    println!("matching names: {:?}",names);
    let mut symbol_definitions = Vec::new();
    for (i,name) in names.into_iter().enumerate(){
       let addr = to_native_endianness_32b(elf_header, &sym_entries[i].value) as usize;
-      println!("symdef: {}@{}",name,addr);
-      symbol_definitions.push((addr,name));
+      let index = to_native_endianness_16b(elf_header, &sym_entries[i].header_index);
+      let t: SymbolType = Into::<Option<SymbolType>>::into(&sym_entries[i]).unwrap();
+      println!("symdef: {}@{}(hdr_idx: {})|t|",name,addr, index);
+      symbol_definitions.push(
+         SymbolDefinition{
+            position: addr,
+            name: name,
+            section_index: index,
+            _type: t
+         });
    }
 
-   symbol_definitions.sort_by_key(|(a, _)| *a);
+   symbol_definitions.sort_unstable();
    return Ok(symbol_definitions);
 }
 
@@ -539,17 +599,17 @@ pub struct Pool{
 
 impl LiteralPools{
    pub fn create_from_list(
-      symbols: &Vec<(usize,String)>,
+      symbols: &Vec<SymbolDefinition>,
    )->Self{
       let mut data_marks = Vec::new();
       let mut text_marks = Vec::new();
-      for (offset,name) in symbols.iter(){
-         if name.eq("$d"){
-            println!("literal pool {}@{}",name,offset);
-            data_marks.push(*offset);
+      for symbol in symbols.iter(){
+         if symbol.name.eq("$d"){
+            println!("literal pool {}@{}",symbol.name,symbol.position);
+            data_marks.push(symbol.position);
          }
-         if name.eq("$t"){
-            text_marks.push(*offset);
+         if symbol.name.eq("$t"){
+            text_marks.push(symbol.position);
          }
       }
       data_marks.sort();

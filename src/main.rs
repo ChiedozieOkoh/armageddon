@@ -10,7 +10,7 @@ mod ui;
 mod tests;
 
 use std::path::Path;
-use elf::decoder::ElfError;
+use elf::decoder::{ElfError, SymbolDefinition};
 use iced::Application;
 
 use crate::asm::interpreter::print_assembly;
@@ -39,7 +39,7 @@ fn gui_diasm(){
    let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
    let mut sys = System::create_from_text(instructions);
    println!("sys memory image: 0 -> {}",sys.memory.len());
-   sys.set_pc(entry_point).unwrap();
+   sys.set_pc(entry_point & (!1)).unwrap();
    let flags = (sys,entry_point,symbol_map);
    App::run(iced::Settings::with_flags(flags)).unwrap();
 }
@@ -93,7 +93,7 @@ fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
 }
 */
 
-fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, Vec<(usize, String)>),ElfError>{
+fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, Vec<SymbolDefinition>),ElfError>{
    use crate::elf::decoder::{
       SectionHeader,
       get_header,
@@ -125,6 +125,8 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, Vec<(usize, St
       .collect();
 
    let sym_entries = get_section_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
+
+
    //let text_section_symbols = get_text_section_symbols(&elf_header, &section_headers, &sym_entries).unwrap();
    //let names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
    //let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);

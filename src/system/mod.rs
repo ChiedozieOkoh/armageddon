@@ -4,6 +4,7 @@ use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
 use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
+use crate::dbg_ln;
 use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply} ;
 
 use self::instructions::{cond_passed, shift_left, shift_right};
@@ -19,16 +20,25 @@ pub struct System{
    pub registers: Registers,
    pub xpsr: Apsr,
    pub control_register: [u8;4],
-   mode: Mode,
+   pub event_register: bool,
+   pub active_exceptions: [ExceptionStatus;48],
+   pub scs: SystemControlSpace,
+   pub mode: Mode,
+   primask: bool,
    pub memory: Vec<u8>,
    pub breakpoints: Vec<usize>
 }
 
 #[derive(Debug)]
-enum Mode{
+pub enum Mode{
    Thread,
    Handler
 }
+
+const IPSR_MASK: u32 = 0xFFFFFFC0;
+const EXC_RETURN_TO_HANDLER: u32 = 1;
+const EXC_RETURN_TO_THREAD_MSP: u32 = 9;
+const EXC_RETURN_TO_THREAD_PSP: u32 = 0xD;
 
 macro_rules! unpack_operands {
     ($variant:expr, $_type:path, $($vari:ident),+) => {
@@ -68,6 +78,10 @@ impl System{
          registers,
          xpsr: [0;4],
          control_register: [0;4],
+         event_register: false,
+         active_exceptions: [ExceptionStatus::Inactive; 48],
+         primask: false,
+         scs: SystemControlSpace::reset(),
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
          memory: vec![0;capacity],
          breakpoints: Vec::new(),
@@ -80,6 +94,10 @@ impl System{
          registers,
          xpsr: [0;4],
          control_register: [0;4],
+         event_register: false,
+         active_exceptions: [ExceptionStatus::Inactive; 48],
+         scs: SystemControlSpace::reset(),
+         primask: false,
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
          memory: text,
          breakpoints: Vec::new(),
@@ -206,7 +224,9 @@ impl System{
 
    fn bx_interworking_pc_offset(&mut self, addr: u32)->Result<i32, ArmException>{
       if (addr & 0xF0000000 == 0xF0000000) && matches!(self.mode, Mode::Handler){
-         panic!("exception return not implemented yet");
+         let exc_n = self.exception_return(addr)?;
+         dbg_ln!("returned from exception {}",exc_n);
+         return Ok(0);
       }else{
          let bit = (addr & 0x1) != 0;
          self.set_epsr_t_bit(bit);
@@ -219,7 +239,7 @@ impl System{
                ))
             );
          }
-         return Ok(((addr & 0xFFFFFFE) as i32) - (self.registers.pc as i32));
+         return Ok(((addr & 0xFFFFFFFE_u32) as i32) - (self.registers.pc as i32));
       }
    }
 
@@ -229,7 +249,7 @@ impl System{
             true
          },
          Mode::Thread =>{
-            (from_arm_bytes(self.control_register) & 0x2) == 0
+            (from_arm_bytes(self.control_register) & 0x1) == 0
          }
       }
    }
@@ -248,11 +268,60 @@ impl System{
       return Ok(new_addr);
    }
 
-   fn enter_exception(&mut self, exc_type: ArmException)->Result<(),ArmException>{
-      return Ok(());
+   fn lockup(&mut self){
+      self.registers.pc = 0xFFFFFFFE;
+      panic!("locked up at priority lvl:  {}",self.execution_priority(&self.scs));
    }
 
-   fn save_context_frame(&mut self,exc_type: ArmException)->Result<(),ArmException>{
+   pub fn check_for_exceptions(&mut self){
+      for i in 0 .. self.active_exceptions.len(){
+         match &self.active_exceptions[i]{
+            ExceptionStatus::Pending => {
+               let maybe_exp: Option<ArmException> = ArmException::from_exception_number(i as u32);
+               match maybe_exp{
+                  Some(exc) => {
+                     println!(
+                        "execution == {} exception == {}",
+                        self.execution_priority(&self.scs),
+                        exc.priority_group(&self.scs)
+                     );
+                     if exc.priority_group(&self.scs) < self.execution_priority(&self.scs){
+                        match self.init_exception(exc){
+                           Ok(_) => {},
+                           Err(exc) => {
+                              if self.execution_priority(&self.scs) == -1 || self.execution_priority(&self.scs) == -2{
+                                 self.lockup();
+                              }
+                           },
+                        }
+                     }
+                  },
+                  None => {
+                     println!("WARNING unrecognised pending exception {}",i);
+                  }
+               }
+            },
+            _ => {}
+         }
+      }
+   }
+
+   fn init_exception(&mut self, exc_type: ArmException)->Result<Option<u32>,ArmException>{
+      if self.execution_priority(&self.scs) < exc_type.priority_group(&self.scs){
+         println!("{:?} exception will remain pending",exc_type);
+         self.active_exceptions[exc_type.number() as usize] = ExceptionStatus::Pending;
+         self.scs.set_vec_pending(exc_type.number());
+         return Ok(None);
+      }else{
+         println!("initialising {:? } exception",exc_type);
+         self.save_context_frame(&exc_type)?;
+         let offset = self.jump_to_exception(&exc_type)?;
+         self.offset_pc(offset)?;
+         return Ok(Some(self.get_ipsr()));
+      }
+   }
+
+   fn save_context_frame(&mut self,exc_type: &ArmException)->Result<(),ArmException>{
       let sp = self.get_sp();
       let mut xpsr = from_arm_bytes(self.xpsr);
       xpsr = if self.get_sp_frame_alignment(){
@@ -261,12 +330,11 @@ impl System{
          xpsr & (!(1 << 9))
       };
 
-      let next_instr_address = match exc_type{
-         ArmException::HardFault(_) => (self.registers.pc as u32) + 2
-      };
+      let next_instr_address = exc_type.return_address(self.registers.pc as u32,true);
 
       let offset = std::mem::size_of::<ProcessStackFrame>();
-      let frame_ptr = sp - offset as u32;
+      let frame_ptr = (sp - offset as u32) & !0x4;
+      self.set_sp(frame_ptr)?;
       write_memory(self,frame_ptr, into_arm_bytes(self.registers.generic[0]))?;
       write_memory(self,frame_ptr + 4, into_arm_bytes(self.registers.generic[1]))?;
       write_memory(self,frame_ptr + 8, into_arm_bytes(self.registers.generic[2]))?;
@@ -276,6 +344,9 @@ impl System{
       write_memory(self,frame_ptr + 24, into_arm_bytes(next_instr_address))?;
       write_memory(self,frame_ptr + 28, into_arm_bytes(xpsr))?;
 
+      const main_stack_return_to_handler_mode: u32 = 0xFFFFFFF1;
+      const main_stack_return_to_thread_mode: u32 = 0xFFFFFFF9;
+      const process_stack_return_to_thread_mode: u32 = 0xFFFFFFFD;
       self.registers.lr = match self.mode{
          Mode::Handler => {0xFFFFFFF1},
          Mode::Thread =>{
@@ -285,28 +356,123 @@ impl System{
       return Ok(());
    }
 
-   fn set_ipsr(&mut self, exc_type: &ArmException){
-      let mut new_xpsr = from_arm_bytes(self.xpsr);
-      let mask: u32 = exc_type.number() | 0xFFFFFFD0;
-      new_xpsr &= mask;
+   fn reset_ipsr(&mut self){
+      assert!(matches!(self.mode,Mode::Thread));
+      let new_xpsr = from_arm_bytes(self.xpsr) & IPSR_MASK;
       self.xpsr = into_arm_bytes(new_xpsr);
    }
 
-   fn get_vtor_value(&self)-> u32{
-      //todo memory map this 
-      return 0;
+   fn set_ipsr(&mut self, exc_type: &ArmException){
+      let mut new_xpsr = from_arm_bytes(self.xpsr);
+      let mask: u32 = exc_type.number() & 0x3F;
+      new_xpsr |= mask;
+      self.xpsr = into_arm_bytes(new_xpsr);
    }
+
+   pub fn get_ipsr(&self)->u32{
+      from_arm_bytes(self.xpsr) & 0x3F
+   }
+
 
    fn jump_to_exception(&mut self, exc_type: &ArmException)->Result<i32, ArmException>{
       self.mode = Mode::Handler;
       self.set_ipsr(&exc_type);
       self.set_sp_select_bit(false);
-      panic!("execptionActive[i], SCS_UpdateStatusRegs() & SetEventRegister() are not implemented");
-      let vector_table = self.get_vtor_value();
+      //panic!("SCS_UpdateStatusRegs() is not implemented");
+      self.active_exceptions[exc_type.number() as usize] = ExceptionStatus::Active;
+      self.scs.set_vec_active(exc_type.number());
+      let vector_table = self.scs.vtor;
       let handler_addr = vector_table + (4 * exc_type.number());
       let handler_ptr = from_arm_bytes(load_memory::<4>(self, handler_addr)?);
+      self.event_register = true;
       self.bx_interworking_pc_offset(handler_ptr)
    }
+
+   fn get_npriv(&self)->bool{
+      (from_arm_bytes(self.control_register) & 1) > 0
+   }
+
+   fn load_context_frame(&mut self,exc_return_address: u32)->Result<(),ArmException>{
+      let frame_ptr = self.get_sp();
+      self.registers.generic[0] = from_arm_bytes(load_memory(self, frame_ptr)?);
+      self.registers.generic[1] = from_arm_bytes(load_memory(self, frame_ptr + 4)?);
+      self.registers.generic[2] = from_arm_bytes(load_memory(self, frame_ptr + 8)?);
+      self.registers.generic[3] = from_arm_bytes(load_memory(self, frame_ptr + 12)?);
+      self.registers.generic[12] = from_arm_bytes(load_memory(self, frame_ptr + 16)?);
+      self.registers.lr = from_arm_bytes(load_memory(self, frame_ptr + 20)?);
+      let new_pc = from_arm_bytes(load_memory(self, frame_ptr + 24)?);
+      if !is_aligned(new_pc, 2){
+         panic!("WTAF the pc value {:#x} onto the context frame is invalid",new_pc);
+      }
+
+      self.registers.pc = new_pc as usize;
+      let frame_xpsr = from_arm_bytes(load_memory(self, frame_ptr + 28)?);
+      let frame_alignment =  frame_xpsr & 0x200 > 0;
+      let new_sp = (self.get_sp() + 0x20) | (frame_alignment as u32 >> 3);
+      self.set_sp(new_sp)?;
+      let new_xpsr = if matches!(self.mode,Mode::Thread) && self.get_npriv(){
+         println!("forced into thread mode");
+         0xF1000000 & frame_xpsr
+      }else{
+         0xF100003F & frame_xpsr
+      };
+      self.xpsr = into_arm_bytes(new_xpsr);
+      return Ok(());
+   }
+
+   fn exception_return(&mut self,return_address: u32)->Result<u32,ArmException>{
+      assert!(matches!(self.mode,Mode::Handler));
+      let handled_exception = self.get_ipsr();
+      assert_eq!(return_address & 0x0FFFFFF0,0x0FFFFFF0,"exception return address is invalid");
+      
+      let mut nested_exceptions = 0;
+      for status in self.active_exceptions.iter(){
+         match status{
+            ExceptionStatus::Active => {
+               nested_exceptions += 1;
+            },
+            _ => {},
+         }
+      }
+
+      assert!(nested_exceptions > 0, "emulator err: return from an already inactive handler");
+
+      let exc_ret_type = return_address & 0xF;
+      match exc_ret_type{
+         EXC_RETURN_TO_HANDLER => {
+            assert!(nested_exceptions > 1,"exception return type is return to handler but only one exception is active");
+            self.mode = Mode::Handler;
+            self.set_sp_select_bit(false);
+            assert_eq!(self.get_sp(),self.registers.sp_main);
+         },
+         EXC_RETURN_TO_THREAD_MSP =>{
+            assert!(nested_exceptions == 1,"exception return type is return to thread, so there should only be 1 active");
+            self.mode = Mode::Thread;
+            self.set_sp_select_bit(false);
+            assert_eq!(self.get_sp(),self.registers.sp_main);
+         },
+         EXC_RETURN_TO_THREAD_PSP =>{
+            assert!(nested_exceptions == 1,"exception return type is return to thread, so there should only be 1 active");
+            self.mode = Mode::Thread;
+            self.set_sp_select_bit(true);
+            assert_eq!(self.get_sp(),self.registers.sp_process);
+         },
+         _ => panic!("invalid exception return type {}",exc_ret_type)
+      }
+
+      self.active_exceptions[handled_exception as usize] = ExceptionStatus::Inactive;
+      self.scs.clear_vec_active();
+
+      self.load_context_frame(return_address)?;
+      match self.mode{
+         Mode::Thread => assert!(self.get_ipsr() == 0,"Thread mode must mean IPSR is 0"),
+         Mode::Handler => assert!(self.get_ipsr() != 0, "Handler mode must mean IPSR > 0 "),
+      }
+
+      self.event_register = true;
+      return Ok(handled_exception);
+   }
+
 
    #[inline]
    pub fn on_breakpoint(&self)->bool{
@@ -828,6 +994,15 @@ impl System{
                Opcode::_16Bit(B16::NOP) => {
                   return Ok(instr_size.in_bytes() as i32);
                },
+
+               Opcode::_16Bit(B16::WFE) => {
+                  if self.event_register{
+                     self.event_register = false;
+                     return Ok(instr_size.in_bytes() as i32);
+                  }else{
+                     return Ok(0_i32);
+                  }
+               }
                _ => todo!()
             } 
          },
@@ -847,12 +1022,28 @@ impl System{
                      return Ok(instr_size.in_bytes() as i32);
                   }
 
+                  assert!(src.0 != 13 && src.0 != 15,"MSR for R13 and R15 is UNDEFINED");
+                  let src_value = self.read_any_register(src.0);
                   match special{
                      SpecialRegister::MSP => {
-                        self.registers.sp_main = self.registers.generic[src.0 as usize];
+                        self.registers.sp_main = src_value & 0xFFFFFFFC_u32;
+                     },
+                     SpecialRegister::PSP => {
+                        self.registers.sp_process = src_value & 0xFFFFFFFC_u32;
+                     },
+                     SpecialRegister::CONTROL => {
+                        let mut cr = from_arm_bytes(self.control_register); 
+                        if matches!(self.mode,Mode::Thread){
+                           //can only only change the sp_sel bit in thread mode
+                           cr = cr | (src_value & 3);
+                        }else{
+                           cr = cr | (src_value & 1);
+                        }
+                        self.control_register = into_arm_bytes(cr);
                      },
                      _ => todo!()
                   }
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -951,6 +1142,24 @@ impl System{
          _ => unreachable!()
       }
    }
+
+   pub fn execution_priority(&self, scs: &SystemControlSpace)->i32{
+      let mut cur_priority: i32 = 4;
+      let boosted_priority = if self.primask {0}else{4};
+
+      for (i,status) in self.active_exceptions.iter().enumerate(){
+         match status{
+            ExceptionStatus::Active => {
+               let exception = ArmException::from_exception_number(i as u32).unwrap();
+               let exc_priority = exception.priority_group(scs);
+               cur_priority = std::cmp::min(cur_priority,exc_priority);
+            },
+            _ => {}
+        }
+      }
+
+      std::cmp::min(cur_priority,boosted_priority)
+   }
 }
 
 pub fn is_thread_privileged(sys: &System)->bool{
@@ -1029,15 +1238,132 @@ fn is_aligned(v_addr: u32, size: u32)->bool{
    return v_addr & mask == 0;
 }
 
+#[derive(Clone,Copy,Debug)]
+pub enum ExceptionStatus{
+   Active,
+   Inactive,
+   Pending,
+   ActiveAndPending
+}
+
 #[derive(Clone,Debug)]
 pub enum ArmException{
+   Reset,
+   Nmi,
    HardFault(String),
+   Svc,
+   PendSV,
+   SysTick,
+   ExternInterrupt(u32),
 }
+
 impl ArmException{
+   pub fn from_xpsr(sys: &System)->Option<Self>{
+      let ipsr = from_arm_bytes(sys.xpsr) & 0x2F;
+      return Self::from_exception_number(ipsr);
+   }
+
+   pub fn from_exception_number(n: u32)->Option<Self>{
+      match n{
+         0 => None,
+         1 => Some(Self::Reset),
+         2 => Some(Self::Nmi),
+         3 => Some(Self::HardFault("".into())),
+         4 ..=10 => None, //is describe as RESERVED in the ISA
+         11 => Some(Self::Svc),
+         12 ..=13 => None, //RESERVED
+         14 => Some(Self::PendSV),
+         15 => Some(Self::SysTick),
+         n  => Some(Self::ExternInterrupt(n))
+      }
+   }
+
+   pub fn return_address(&self,current_address: u32, sync: bool)-> u32{
+      let next = (current_address + 2) & 0xFFFFFFFE;
+      println!("{:?}@{} will return to {}",&self,current_address,next);
+      match self{
+         ArmException::Reset => panic!("cannot return from reset exception"),
+         ArmException::Nmi => next,
+         ArmException::HardFault(_) => if sync{ current_address }else{ next },
+         ArmException::Svc => next,
+         ArmException::PendSV => next,
+         ArmException::SysTick => next,
+         ArmException::ExternInterrupt(_) => next,
+      }
+   }
+
    pub fn number(&self)->u32{
       match self{
+         Self::Reset => 1,
+         Self::Nmi => 2,
          Self::HardFault(_) => 3,
+         Self::Svc => 11,
+         Self::PendSV => 14,
+         Self::SysTick => 15,
+         Self::ExternInterrupt(n) => *n,
       }
+   }
+
+   pub fn is_fault(&self)->bool{
+      match self{
+         Self::Reset => false,
+         Self::Nmi => false,
+         Self::HardFault(_) => true,
+         Self::Svc => false,
+         Self::PendSV => false,
+         Self::SysTick => false,
+         Self::ExternInterrupt(_) => false,
+      }
+   }
+
+   pub fn priority_group(&self, _scs: &SystemControlSpace)->i32{
+      match self{
+         Self::Reset => -3,
+         Self::Nmi => -2,
+         Self::HardFault(_) => -1,
+         Self::Svc =>{ ((_scs.shpr2 & 0x80000000) >> 31) as i32 },
+         Self::PendSV =>{ ((_scs.shpr3 & 0x00800000) >> 23) as i32 },
+         Self::SysTick =>{ ((_scs.shpr3 & 0x80000000) >> 31) as i32 },
+         Self::ExternInterrupt(n) => _scs.nvic_priority_of(*n),
+      }
+   }
+}
+
+pub struct SystemControlSpace{
+   pub icsr: u32,
+   pub vtor: u32,
+   shpr2: u32,
+   shpr3: u32,
+   ipr: [u32;8]
+}
+
+impl SystemControlSpace{
+   pub fn reset()->Self{
+      Self { icsr: 0, vtor: 0, shpr2: 0, shpr3: 0, ipr: [0; 8] }
+   }
+
+   pub fn set_vec_active(&mut self, exc_n: u32){
+      self.icsr |= exc_n;
+   }
+
+   pub fn clear_vec_active(&mut self){
+      self.icsr &= IPSR_MASK;
+   }
+
+   pub fn set_vec_pending(&mut self, exc_n: u32){
+      self.icsr |= exc_n << 12;
+   }
+
+   pub fn clear_vec_pending(&mut self){
+      self.icsr &= !(IPSR_MASK << 12);
+   }
+
+   pub fn nvic_priority_of(&self, exec: u32)->i32{
+      let word_offset = (exec - 16) & 0xFFFFFFFC;
+      let intra_word_offset = (exec - 16) - word_offset;
+      let mut shift = 7; 
+      shift += 8 * intra_word_offset;
+      return ((self.ipr[word_offset as usize] & (1 << shift)) >> shift) as i32;
    }
 }
 
@@ -1118,6 +1444,7 @@ impl MemPermission{
       }
    }
 }
+
 
 fn is_region_ppb(v_addr: u32)->bool{
    match v_addr{

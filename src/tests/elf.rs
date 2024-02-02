@@ -8,10 +8,10 @@ use crate::elf::decoder::{
    get_all_section_headers,
    is_text_section_hdr,
    SectionHeader,
-   read_text_section, is_symbol_table_section_hdr, get_section_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map,  get_text_section_symbols, get_entry_point_offset, LiteralPools, get_all_symbol_names
+   read_text_section, is_symbol_table_section_hdr, get_section_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map,  get_text_section_symbols, get_entry_point_offset, LiteralPools, get_all_symbol_names, SymbolType, SymbolDefinition
 };
 
-fn write_asm_make_elf(path: &str, data: &[u8])->Result<PathBuf, std::io::Error>{
+pub fn write_asm_make_elf(path: &str, data: &[u8])->Result<PathBuf, std::io::Error>{
    println!("writing to [{:?}]", path);
    let mut file = File::create(path)?;
    file.write_all(data)?;
@@ -89,7 +89,7 @@ fn should_read_text_section(){
    assert!(!text_section.is_empty());
 }
 
-fn link_elf(new_elf: &Path, elf: &Path, linker_script: &Path){
+pub fn link_elf(new_elf: &Path, elf: &Path, linker_script: &Path){
    let sh = Command::new("arm-none-eabi-ld")
       .arg("-T")
       .arg(linker_script)
@@ -167,13 +167,13 @@ fn should_get_all_symbols()->Result<(),std::io::Error>{
    assert_eq!(pool.end.unwrap(),8);
    let mut sym_table = SymbolTable::create(&symbols);
    
-   assert_eq!(sym_table.progressive_lookup(0),Some(&String::from("_entry_point")));
-   assert_eq!(sym_table.progressive_lookup(8),Some(&String::from("pl_end")));
-   assert_eq!(sym_table.progressive_lookup(data_offset),Some(&String::from("_boot_magic")));
-   assert_eq!(sym_table.progressive_lookup(data_offset + 2),None);
-   assert!(symbols.contains(&(text_offset,String::from("_entry_point"))));
-   assert!(symbols.contains(&(data_offset,String::from("_boot_magic"))));
-   assert!(symbols.contains(&(8,String::from("pl_end"))));
+   assert_eq!(sym_table.lookup(0),Some(&String::from("_entry_point")));
+   assert_eq!(sym_table.lookup(8),Some(&String::from("pl_end")));
+   assert_eq!(sym_table.lookup(data_offset),Some(&String::from("_boot_magic")));
+   assert_eq!(sym_table.lookup(data_offset + 2),None);
+   assert!(symbols.contains(&SymbolDefinition{position: text_offset,name: String::from("_entry_point"), _type: SymbolType::Notype, section_index: 1}));
+   assert!(symbols.contains(&SymbolDefinition{position: data_offset,name: String::from("_boot_magic"), _type: SymbolType::Notype, section_index: 2}));
+   assert!(symbols.contains(&SymbolDefinition{position: 8,name: String::from("pl_end"), _type: SymbolType::Notype, section_index: 1}));
    Ok(())
 }
 

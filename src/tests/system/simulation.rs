@@ -1,5 +1,7 @@
 
 use std::any::Any;
+use std::fs::File;
+use std::io::Write;
 use std::io::{Error,ErrorKind};
 use std::path::Path;
 
@@ -7,8 +9,9 @@ use crate::binutils::from_arm_bytes;
 use crate::system::instructions::{zero_flag, negative_flag, carry_flag, overflow_flag};
 use crate::system::registers::{get_overflow_bit, get_carry_bit};
 use crate::tests::asm::{write_asm, asm_file_to_elf, asm_file_to_elf_armv6m};
+use crate::tests::elf::{write_asm_make_elf, link_elf};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
-use crate::system::{ArmException, System};
+use crate::system::{ArmException, System, ExceptionStatus, Mode};
 use crate::elf::decoder::to_native_endianness_32b;
 use super::gdb_script;
 
@@ -71,6 +74,51 @@ fn run_assembly<
    return Ok(res.unwrap());
 }
 
+
+fn run_elf<
+   T: Any,
+   F: Fn(usize,&[u8])->Result<T,ArmException>
+>(elf: &Path, interpreter: F)->Result<T,std::io::Error>{
+   let (elf_header,mut reader) = get_header(&elf).unwrap();
+
+   let maybe_hdr = get_all_section_headers(&mut reader, &elf_header);
+   if maybe_hdr.is_err(){
+      std::fs::remove_file(&elf)?;
+      return Err(Error::new(ErrorKind::Other, "could not read hdr"));
+   }
+
+   let section_headers = maybe_hdr.unwrap();
+   println!("sect_hdrs {:?}",section_headers);
+   assert!(!section_headers.is_empty());
+
+   let text_sect_hdr: Vec<SectionHeader> = section_headers.into_iter()
+      .filter(|hdr| is_text_section_hdr(&elf_header, hdr))
+      .collect();
+
+   println!("header {:?}",text_sect_hdr);
+   assert_eq!(text_sect_hdr.len(),1);
+   let sect_hdr = &text_sect_hdr[0];
+
+   let maybe_text_section = read_text_section(&mut reader, &elf_header, sect_hdr);
+   if maybe_text_section.is_err(){
+      std::fs::remove_file(&elf)?;
+      return Err(Error::new(ErrorKind::Other, "could not read text section"));
+   }
+
+   let text_section = maybe_text_section.unwrap();
+   assert!(!text_section.is_empty());
+
+   let entry_point = to_native_endianness_32b(&elf_header, &elf_header._entry_point);
+
+   let res = interpreter(entry_point as usize, &text_section[..]);
+
+   if res.as_ref().is_err(){
+      println!("failed execution exited due to: {:?}",res.as_ref().err());
+   }
+
+   std::fs::remove_file(&elf)?;
+   return Ok(res.unwrap());
+}
 
 fn run_assembly_armv6m<
    T: Any,
@@ -383,6 +431,51 @@ pub fn should_do_shifts()->Result<(), std::io::Error>{
 }
 
 #[test]
+pub fn should_support_ctrl_register()->Result<(), std::io::Error>{
+   let bin_size = 1024;
+   let code = b"
+   .thumb
+   .text 
+      LDR r0, =0xFFFF
+      LDR r1, =1024;
+      MSR PSP, r1
+      MSR CONTROL,r0
+      PUSH {r0,r1}
+      ";
+   run_assembly_armv6m(
+      Path::new("sim_ctrl_register.s"),
+      code,
+      |entry_point, binary|{
+         let mut sys = load_code_into_system(entry_point, binary)?;
+         sys.expand_memory_to(bin_size);
+         let i = sys.step()?;  //LDR r0, =0xFFFF
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;  //LDR r0, =1024
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;  //MSR PSP,r0
+         assert_eq!(sys.registers.sp_process, 1024);
+         assert!(sys.get_sp() != 1024);
+         sys.offset_pc(i)?;
+
+
+         let i = sys.step()?;  //MSR CONTROL,r0
+         assert_eq!(sys.get_sp(), 1024);
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?; //PUSH {r0,r1]
+         assert_eq!(sys.get_sp(),1024 - (4*2));
+         assert_eq!(sys.registers.sp_process,1024 - (4*2));
+         sys.offset_pc(i)?;
+
+         Ok(())
+   })?;
+
+   Ok(())
+}
+
+#[test]
 pub fn should_support_stack()->Result<(), std::io::Error>{
    let bin_size = 1024;
    let code = b".thumb
@@ -446,6 +539,110 @@ pub fn should_support_stack()->Result<(), std::io::Error>{
          Ok(())
    })?;
 
+   Ok(())
+}
+
+#[test]
+pub fn support_exceptions()->Result<(),std::io::Error>{
+   let elf = write_asm_make_elf(
+      "./assembly_tests/basic_exception.s",
+      concat!(
+         ".thumb\n",
+         ".text\n",
+         ".equ _STACK_SIZE,0x20\n",
+         ".global _entry_point\n",
+         "_vector_table:\n",
+         "   .4byte _SP_RESET_VAL\n",
+         "   .4byte _reset_handler\n",
+         "   .4byte _nmi_handler\n",
+         ".thumb_func\n",
+         "_reset_handler:\n",
+         "   BKPT\n",
+         ".thumb_func\n",
+         "_nmi_handler:\n",
+         "   MOV r0,#7\n",
+         "   BX LR\n",
+         "_entry_point:\n",
+            "MOV r0,#0\n",
+            "LDR r0,[r0,#0]\n",
+            "MSR MSP, r0\n",
+            "MSR PSP, r0\n",
+            "MOV r0,#56\n",
+            "ADD r0,#20\n",
+         "_STACK_START:\n",
+         "   .align 3\n",
+         "   .fill _STACK_SIZE,1,0\n",
+         "_SP_RESET_VAL:\n",
+         "   .size _SP_RESET_VAL, . - _STACK_START\n"
+      ).as_bytes()
+   )?;
+
+   let mut ld_script = File::create("./assembly_tests/basic_exc_load.ld")?;
+   ld_script.write_all(
+      format!(
+         "ENTRY(_entry_point);\n\
+         SECTIONS{{\n\
+            \t. = 0x0;\n\
+            \t.text : {{*(.text)}}\n\
+         }}\n"
+      ).as_bytes()
+   )?;
+
+   let linked = Path::new("./assembly_tests/exceptions.out");
+   link_elf(&linked, &elf, Path::new("./assembly_tests/load.ld"));
+
+   run_elf(&linked, |entry_point, code|{
+      let mut sys = load_code_into_system(entry_point, code)?;
+      let word: [u8;4] = sys.memory[..4].try_into().unwrap();
+      assert!(sys.read_raw_ir() != 0);
+      let sp_reset = from_arm_bytes(word);
+      assert_eq!(sp_reset,sys.memory.len() as u32);
+      let i = sys.step()?; //MOV r0,#0
+      sys.offset_pc(i)?;
+      assert_eq!(sys.get_ipsr(),0);
+
+      let i = sys.step()?; //LDR r0,[r0,#0]
+      assert_eq!(sys.registers.generic[0],sp_reset);
+      sys.offset_pc(i)?;
+      assert_eq!(sys.get_ipsr(),0);
+
+      let i = sys.step()?; //MSR MSP,r0
+      sys.offset_pc(i)?;
+      assert_eq!(sys.registers.sp_main,sp_reset);
+      assert_eq!(sys.get_ipsr(),0);
+
+      let i = sys.step()?; //MSR PSP,r0
+      sys.offset_pc(i)?;
+      assert_eq!(sys.registers.sp_process,sp_reset);
+      assert_eq!(sys.get_ipsr(),0);
+
+      sys.step()?; //MOV r0, #56
+      assert_eq!(sys.registers.generic[0],56);
+      assert_eq!(sys.get_ipsr(),0);
+
+      sys.active_exceptions[2] = ExceptionStatus::Pending;
+      sys.check_for_exceptions();
+      assert_eq!(sys.get_ipsr(),2);
+      assert!(matches!(sys.mode,Mode::Handler));
+
+      let i = sys.step()?; //MOV r0,#7
+      assert_eq!(sys.registers.generic[0],7);
+      assert_eq!(sys.get_ipsr(),2);
+      assert!(matches!(sys.mode,Mode::Handler));
+      sys.offset_pc(i)?;
+
+      let i = sys.step()?; //BX LR (exception return);
+      sys.offset_pc(i)?;
+      assert_eq!(sys.get_ipsr(),0);
+      assert!(matches!(sys.mode,Mode::Thread));
+
+      let i = sys.step()?; //ADD r0, #20 
+      sys.offset_pc(i)?;
+      assert_eq!(sys.registers.generic[0],76);
+      assert_eq!(sys.get_ipsr(),0);
+      assert!(matches!(sys.mode,Mode::Thread));
+      Ok(())
+   })?;
    Ok(())
 }
 

@@ -1,9 +1,9 @@
-use std::{fmt::Display, sync::{Mutex, Arc}, ops::Deref};
+use std::{fmt::Display, sync::{Mutex, Arc}, ops::Deref, path::{Path, PathBuf}};
 
-use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list}, Application, Theme, executor, Command, Element, futures::StreamExt};
+use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list, image, tooltip, mouse_area}, Application, Theme, executor, Command, Element, futures::StreamExt};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b};
+use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b, elf::decoder::SymbolDefinition};
 
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
@@ -14,7 +14,7 @@ pub struct App{
    focus: Option<pane_grid::Pane>,
    entry_point: usize,
    pub disasm: String,
-   symbols: Vec<(usize,String)>,
+   symbols: Vec<SymbolDefinition>,
    mem_view: Option<MemoryView>,
    sys_view: SystemView,
    sync_sys: Arc<Mutex<System>>,
@@ -62,8 +62,8 @@ impl Display for SystemView{
              "r11: {}\n",
              "r12: {}\n",
              "SP: {:#010x}\n",
-             "LR: {:#x}\n",
-             "PC: {:#x}\n",
+             "LR: {:#010x}\n",
+             "PC: {:#010x}\n",
              "XPSR: {:#010x}",
             ),
             self.registers.generic[0],
@@ -81,13 +81,10 @@ impl Display for SystemView{
             self.registers.generic[12],
             self.sp,
             self.registers.lr,
-            self.sp,
+            self.registers.pc,
             self.xpsr
       )
    }
-}
-
-struct MemoryByte{
 }
 
 struct BkptInput{
@@ -95,14 +92,14 @@ struct BkptInput{
 }
 
 impl BkptInput{
-   pub fn try_get_addr(&self, symbols: &Vec<(usize,String)>)->Option<u32>{
+   pub fn try_get_addr(&self, symbols: &Vec<SymbolDefinition>)->Option<u32>{
       match parse_hex(&self.pending_addr_or_symbol){
          Some(addr) => Some(addr),
          None => {
             let treated = self.pending_addr_or_symbol.trim();
-            for (addr, symbol) in symbols{
-               if symbol.eq(treated) && !is_segment_mapping_symbol(symbol){
-                  return Some(*addr as u32);
+            for symbol in symbols{
+               if symbol.name.eq(treated) && !is_segment_mapping_symbol(&symbol.name){
+                  return Some(symbol.position as u32);
                }
             }
             println!("could not identify symbol: {}",self.pending_addr_or_symbol);
@@ -205,17 +202,52 @@ fn user_cmds<'a>(bkpt: &BkptInput)->Element<'a, Event>{
    ].spacing(5).into()
 }
 
+fn img_button<'a>(msg: &str, signal: Event,alt_signal: Event, tip: &str) -> Element<'a,Event>{
+   let btn = tooltip(
+      button(text(msg)).on_press(signal),
+      tip,
+      tooltip::Position::Bottom
+   ).gap(10).style(iced::theme::Container::Box);
+   mouse_area(btn)
+      .on_right_release(alt_signal)
+      .into()
+}
+
+macro_rules! split_pane_event {
+    ($a:expr,$b:path,$c:path) => {
+       Event::Ui(Gui::SplitPane($a,$b,$c))
+    };
+}
+
 fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
+   use pane_grid::Axis::Vertical as Vertical;
+   use pane_grid::Axis::Horizontal as Horizontal;
    row![
-      button(text("D>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::Disassembler,pane_grid::Axis::Vertical))),
-      button(text("D^")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::Disassembler,pane_grid::Axis::Horizontal))),
-      button(text("R>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::SystemState,pane_grid::Axis::Vertical))),
-      button(text("M>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Vertical))),
-      button(text("M^")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Horizontal))),
+      img_button(
+         "D",
+         split_pane_event!(pane,PaneType::Disassembler,Vertical),
+         split_pane_event!(pane,PaneType::Disassembler,Horizontal),
+         "Open disassembly (right click to split horizontally)"
+      ),
+      img_button(
+         "R",
+         split_pane_event!(pane,PaneType::SystemState,Vertical),
+         split_pane_event!(pane,PaneType::SystemState,Horizontal),
+         "View cpu registers (right click to split horizontally)"
+      ),
+      img_button(
+         "M",
+         split_pane_event!(pane,PaneType::MemoryExplorer,Vertical),
+         split_pane_event!(pane,PaneType::MemoryExplorer,Horizontal),
+         "view a region of memory (right click to split horizontally)"
+      ),
+      //button(text("R>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::SystemState,pane_grid::Axis::Vertical))),
+      //button(text("M>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Vertical))),
+      //button(text("M^")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Horizontal))),
       if n_panes > 1{
-         button(text("X")).on_press(Event::Ui(Gui::ClosePane(pane)))
+         button(text("Close")).on_press(Event::Ui(Gui::ClosePane(pane)))
       }else{
-         button(text("X"))
+         button(text("Close"))
       }
    ].spacing(5).into()
 }
@@ -397,7 +429,7 @@ fn focused_pane(theme: &Theme)->container::Appearance{
 }
 
 impl Application for App{
-   type Flags = (System, usize, Vec<(usize,String)>);
+   type Flags = (System, usize, Vec<SymbolDefinition>);
    type Message = Event;
    type Theme = Theme;
    type Executor = executor::Default;

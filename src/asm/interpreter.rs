@@ -1,10 +1,11 @@
-use crate::{asm::decode::{Opcode,B16}, elf::decoder::LiteralPools, binutils::{from_arm_bytes_16b, from_arm_bytes}};
+use crate::{asm::decode::{Opcode,B16}, elf::decoder::{LiteralPools, SymbolDefinition, SymbolType}, binutils::{from_arm_bytes_16b, from_arm_bytes}};
+use crate::dbg_ln;
 use super::{decode_operands::{get_operands, pretty_print, get_operands_32b, Operands}, decode::{instruction_size, InstructionSize}};
 
 const INDENT: &str = "   ";
 
 pub struct SymbolTable<'a>{
-   symbols: &'a Vec<(usize,String)>,
+   symbols: &'a Vec<SymbolDefinition>,
    cursor: usize
 }
 
@@ -13,25 +14,76 @@ pub fn is_segment_mapping_symbol(symbol: &str)->bool{
 }
 
 impl<'a> SymbolTable<'a>{
-   pub fn create(symbols: &'a Vec<(usize, String)>)->Self{
+   pub fn create(symbols: &'a Vec<SymbolDefinition>)->Self{
+      dbg_ln!("sym_arr: {:?}",symbols);
       Self{symbols, cursor: 0}
    }
 
-   pub fn progressive_lookup(&mut self, address: usize)->Option<&String>{
+   fn search_for_thumb_func(&self, address: usize)->Option<&String>{
+      if address % 2 == 0{
+         let thumb_address = address | 1;
+         let after_thumb = self.symbols.partition_point(|symbol| symbol.position > thumb_address);
+         let before_thumb = self.symbols.partition_point(|symbol| symbol.position < thumb_address);
+         for i in before_thumb .. after_thumb{
+            match self.symbols[i]._type{
+               SymbolType::Func => {return Some(&self.symbols[i].name)},
+               _ => {}
+            }
+         }
+         None
+      }else{
+         None
+      }
+   }
+   
+   //TODO consider the case when multiple symbols have the same address value
+   pub fn lookup(&mut self, address: usize)->Option<&String>{
+      return self.progressive_lookup(address);
+   }
+   
+   fn find_thumb_func(&self, address: usize)->Option<&String>{
+      let thumb_address = address | 1;
+      let mut idx = self.symbols.partition_point(|sym| sym.position <= thumb_address);
+      idx -= 1;
+      while self.symbols[idx].position == thumb_address && idx != 0{
+         if matches!(self.symbols[idx]._type,SymbolType::Func){
+            return Some(&self.symbols[idx].name);
+         }
+         idx -= 1;
+      }
+      None
+   }
+
+   fn progressive_lookup(&mut self, address: usize)->Option<&String>{
       if self.cursor >= self.symbols.len(){
          return None;
       }
+
+      if address % 2 == 0 {
+         let thumb_address = address | 1;
+         let mut idx = self.symbols.partition_point(|sym| sym.position <= thumb_address);
+         idx -= 1;
+         while self.symbols[idx].position == thumb_address && idx != 0{
+            if matches!(self.symbols[idx]._type,SymbolType::Func){
+               return Some(&self.symbols[idx].name);
+            }
+            idx -= 1;
+         }
+      }
+
       while self.cursor < self.symbols.len(){
-         let sym_addr = self.symbols[self.cursor].0;
+         let sym_addr = self.symbols[self.cursor].position;
          if sym_addr > address{
             return None;
          }
+
          if sym_addr == address{
-            let name = &self.symbols[self.cursor].1;
+            let name = &self.symbols[self.cursor].name;
             if name.ne("$d") && name.ne("$t"){
                return Some(name);
             }
          }
+         
 
          self.cursor += 1;
       }
@@ -66,7 +118,7 @@ fn symbol_aware_disassemble(
 
 }
 
-pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String)>)->Vec<String>{
+pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<SymbolDefinition>)->Vec<String>{
    let src_code = disassemble(
       bytes,
       symbols,
@@ -79,7 +131,7 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String
          symbol_aware_disassemble(byte_offset, code, maybe_args, label)
       },
       |byte_offset,pool,sym_table|{
-         let symbol = sym_table.progressive_lookup(byte_offset);
+         let symbol = sym_table.lookup(byte_offset);
          let mut line = String::new(); 
          if symbol.is_some(){
             line.push_str(&format!("\n{:#010x} <",byte_offset));
@@ -103,7 +155,7 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String
                let mut i = 0;
                for b in pool{
                   if i != 0 {
-                     let inner_symbol = sym_table.progressive_lookup(byte_offset + i);
+                     let inner_symbol = sym_table.lookup(byte_offset + i);
                      if inner_symbol.is_some(){
                         line.push_str(&format!("\n{:#010x}: <",byte_offset + i));
                         line.push_str(inner_symbol.unwrap());
@@ -130,7 +182,7 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<(usize,String
    src_code
 }
 
-pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<(usize, String)>){
+pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<SymbolDefinition>){
    let src_code = disassemble(
       bytes,
       symbols,
@@ -143,7 +195,7 @@ pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<(usize, Str
          symbol_aware_disassemble(byte_offset, code, maybe_args, label)
       },
       |byte_offset,pool,sym_table|{
-         let symbol = sym_table.progressive_lookup(byte_offset);
+         let symbol = sym_table.lookup(byte_offset);
          let mut line = String::new(); 
          if symbol.is_some(){
             line.push_str(&format!("\n{:#010x} <",byte_offset));
@@ -167,7 +219,7 @@ pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<(usize, Str
                let mut i = 0;
                for b in pool{
                   if i != 0 {
-                     let inner_symbol = sym_table.progressive_lookup(byte_offset + i);
+                     let inner_symbol = sym_table.lookup(byte_offset + i);
                      if inner_symbol.is_some(){
                         line.push_str(&format!("\n{:#010x}: <",byte_offset + i));
                         line.push_str(inner_symbol.unwrap());
@@ -201,7 +253,7 @@ T,
 F: Fn(usize,Opcode,[u8;2],Option<&String>)->T,
 G: Fn(usize,Opcode,[u8;4],Option<&String>)->T,
 P: FnMut(usize,&[u8],&mut SymbolTable)->T,
-> (bytes: &[u8], symbols: &Vec<(usize,String)>, operation_16b: F,operation_32b: G, mut pool_handler: P)->Vec<T>{
+> (bytes: &[u8], symbols: &Vec<SymbolDefinition>, operation_16b: F,operation_32b: G, mut pool_handler: P)->Vec<T>{
    let mut i: usize = 0;
    let mut result: Vec<T> = Vec::new();
    let pools = LiteralPools::create_from_list(symbols);
@@ -225,7 +277,7 @@ P: FnMut(usize,&[u8],&mut SymbolTable)->T,
          },
          None => {
             let hw: [u8;2] = bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
-            let maybe_label = sym_table.progressive_lookup(i);
+            let maybe_label = sym_table.lookup(i);
             match instruction_size(hw){
                InstructionSize::B16 => {
                   let thumb_instruction = Opcode::from(hw);

@@ -19,18 +19,18 @@ pub enum SpecialRegister{
 impl SpecialRegister{
    pub fn needs_privileged_access(&self)->bool{
       match self{
-        SpecialRegister::APSR => false,
-        SpecialRegister::IAPSR => todo!(),
-        SpecialRegister::EAPSR => todo!(),
-        SpecialRegister::XPSR => true,
-        SpecialRegister::IPSR => true,
-        SpecialRegister::EPSR => true,
-        SpecialRegister::IEPSR => true,
-        SpecialRegister::MSP => true,
-        SpecialRegister::PSP => true,
-        SpecialRegister::PRIMASK => true,
-        SpecialRegister::CONTROL => true,
-    }
+         SpecialRegister::APSR => false,
+         SpecialRegister::IAPSR => todo!(),
+         SpecialRegister::EAPSR => todo!(),
+         SpecialRegister::XPSR => true,
+         SpecialRegister::IPSR => true,
+         SpecialRegister::EPSR => true,
+         SpecialRegister::IEPSR => true,
+         SpecialRegister::MSP => true,
+         SpecialRegister::PSP => true,
+         SpecialRegister::PRIMASK => true,
+         SpecialRegister::CONTROL => true,
+      }
    }
 }
 
