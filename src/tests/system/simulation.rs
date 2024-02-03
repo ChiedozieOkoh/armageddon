@@ -646,6 +646,159 @@ pub fn support_exceptions()->Result<(),std::io::Error>{
    Ok(())
 }
 
+#[test]
+pub fn exception_preemption_test()->Result<(),std::io::Error>{
+   let elf = write_asm_make_elf(
+      "./assembly_tests/exception_preemption.s",
+      concat!(
+         ".thumb\n",
+         ".text\n",
+         ".equ _STACK_SIZE,0x80\n",
+         ".global _entry_point\n",
+         "_vector_table:\n",
+         "   .4byte _SP_RESET_VAL\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _nmi_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _dummy_handler\n",
+         "   .4byte _svc_handler\n",
+         ".thumb_func\n",
+         "_nmi_handler:\n",
+         "   MOV r0,#7\n",
+         "   BX LR\n",
+         ".thumb_func\n",
+         "_dummy_handler:\n",
+         "   BKPT\n",
+         ".thumb_func\n",
+         "_svc_handler:\n",
+         "   MOV r0,#20\n",
+         "   MOV r0,#42\n",
+         "   BX LR\n",
+
+         "_entry_point:\n",
+            "MOV r0,#0\n",
+            "LDR r0,[r0,#0]\n",
+            "MSR MSP, r0\n",
+            "MSR PSP, r0\n",
+            "MOV r0,#56\n",
+            "ADD r0,#81\n",
+         "_STACK_START:\n",
+         "   .align 3\n",
+         "   .fill _STACK_SIZE,1,0\n",
+         "_SP_RESET_VAL:\n",
+         "   .size _SP_RESET_VAL, . - _STACK_START\n"
+      ).as_bytes()
+   )?;
+
+   let mut ld_script = File::create("./assembly_tests/exception_preemption.ld")?;
+   ld_script.write_all(
+      format!(
+         "ENTRY(_entry_point);\n\
+         SECTIONS{{\n\
+            \t. = 0x0;\n\
+            \t.text : {{*(.text)}}\n\
+         }}\n"
+      ).as_bytes()
+   )?;
+
+
+   let linked = Path::new("./assembly_tests/exc_preemption.out");
+   link_elf(&linked, &elf, Path::new("./assembly_tests/exception_preemption.ld"));
+
+   run_elf(&linked, |entry_point, code|{
+      let mut sys = load_code_into_system(entry_point, code)?;
+      let word: [u8;4] = sys.memory[..4].try_into().unwrap();
+      assert!(sys.read_raw_ir() != 0);
+      let sp_reset = from_arm_bytes(word);
+      assert_eq!(sp_reset,sys.memory.len() as u32);
+
+      for _ in 0..4{
+         let i = sys.step()?; 
+         sys.offset_pc(i)?;
+         assert_eq!(sys.get_ipsr(),0);
+         assert!(matches!(sys.mode, Mode::Thread));
+      }
+
+         let i = sys.step()?; 
+         assert_eq!(sys.registers.generic[0],56);
+         println!("pc before {:#x}",sys.read_raw_ir());
+
+         sys.active_exceptions[11] = ExceptionStatus::Pending;
+         sys.check_for_exceptions();
+         assert_eq!(sys.get_ipsr(),11);
+         assert!(matches!(sys.active_exceptions[11],ExceptionStatus::Active));
+         assert!(matches!(sys.mode, Mode::Handler));
+         println!("pc is now {:#x}",sys.read_raw_ir());
+         
+         println!("started executing SVC");
+         let i = sys.step()?;//MOV r0,#20
+         assert_eq!(sys.registers.generic[0],20);
+         assert_eq!(sys.get_ipsr(),11);
+         assert!(matches!(sys.mode, Mode::Handler));
+
+         
+         sys.active_exceptions[2] = ExceptionStatus::Pending;
+         sys.check_for_exceptions();
+         assert!(matches!(sys.active_exceptions[2],ExceptionStatus::Active));
+         assert_eq!(sys.get_ipsr(),2);
+         assert!(matches!(sys.mode, Mode::Handler));
+         let nmi_pc = sys.read_raw_ir();
+         println!("nmi pc {:#x}",sys.read_raw_ir());
+         println!(
+            "@: {:#x} in mem value: {:#x},{:#x}",
+            nmi_pc,
+            sys.memory[nmi_pc as usize],
+            sys.memory[nmi_pc as usize + 1],
+           );
+
+         
+         let i = sys.step()?; //MOV r0, #7
+         println!("{:?}",sys.registers.generic);
+         assert_eq!(sys.registers.generic[0],7);
+         assert!(matches!(sys.active_exceptions[2],ExceptionStatus::Active));
+         assert_eq!(sys.get_ipsr(),2);
+         assert!(matches!(sys.mode, Mode::Handler));
+         sys.offset_pc(i)?;
+         
+         let i = sys.step()?;//BX LR (Exception return)
+         sys.offset_pc(i)?;
+         assert!(matches!(sys.active_exceptions[2],ExceptionStatus::Inactive));
+         assert!(matches!(sys.active_exceptions[11],ExceptionStatus::Active));
+         assert_eq!(sys.get_ipsr(),11);
+         assert!(matches!(sys.mode, Mode::Handler));
+
+         let i = sys.step()?;//MOV r0,#42
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[0],42);
+         assert!(matches!(sys.active_exceptions[11],ExceptionStatus::Active));
+         assert_eq!(sys.get_ipsr(),11);
+         assert!(matches!(sys.mode, Mode::Handler));
+
+         let i = sys.step()?; //BX LR (Exception return)
+         sys.offset_pc(i)?;
+         assert!(matches!(sys.active_exceptions[11],ExceptionStatus::Inactive));
+         assert_eq!(sys.get_ipsr(),0);
+         assert!(matches!(sys.mode, Mode::Thread));
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[0],56+81);
+         assert!(matches!(sys.active_exceptions[11],ExceptionStatus::Inactive));
+         assert_eq!(sys.get_ipsr(),0);
+         assert!(matches!(sys.mode, Mode::Thread));
+
+      Ok(())
+   })?;
+
+   Ok(())
+}
+
 #[test] 
 pub fn  euclid_gcd()->Result<(),std::io::Error>{
    assert_eq!(run_euclid(1, 2).unwrap(), (1,1));

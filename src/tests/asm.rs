@@ -1081,6 +1081,15 @@ fn should_recognise_lsr()->Result<(),std::io::Error>{
 fn should_recognise_mov()->Result<(),std::io::Error>{
    let path = Path::new("assembly_tests/mov.s");
 
+   let bytes = assemble_by(
+      path,
+      b".text\n.thumb\nMOV r0,#7\n",
+      asm_file_to_elf_armv6
+   ).unwrap();
+
+   let sanity: Opcode = ([bytes[0],bytes[1]]).into();
+   assert_eq!(Opcode::_16Bit(B16::MOV_Imm8),sanity);
+
    let bytes = assemble(
       path,
       b".text\n.syntax unified\n.thumb\nMOVS.N r7,#255\n"

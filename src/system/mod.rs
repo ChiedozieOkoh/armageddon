@@ -289,6 +289,7 @@ impl System{
                         match self.init_exception(exc){
                            Ok(_) => {},
                            Err(exc) => {
+                              panic!("error during exception entry {:?}",exc);
                               if self.execution_priority(&self.scs) == -1 || self.execution_priority(&self.scs) == -2{
                                  self.lockup();
                               }
@@ -316,7 +317,9 @@ impl System{
          println!("initialising {:? } exception",exc_type);
          self.save_context_frame(&exc_type)?;
          let offset = self.jump_to_exception(&exc_type)?;
+         println!("exception offset: {:#x}",offset);
          self.offset_pc(offset)?;
+         println!("exception branched pc -> {:#x}",offset);
          return Ok(Some(self.get_ipsr()));
       }
    }
@@ -365,7 +368,8 @@ impl System{
    fn set_ipsr(&mut self, exc_type: &ArmException){
       let mut new_xpsr = from_arm_bytes(self.xpsr);
       let mask: u32 = exc_type.number() & 0x3F;
-      new_xpsr |= mask;
+      new_xpsr = (new_xpsr & !0x3F) | mask;
+      println!("xpsr: {:#x} new ipsr: {:#x}",new_xpsr,mask);
       self.xpsr = into_arm_bytes(new_xpsr);
    }
 
@@ -385,6 +389,7 @@ impl System{
       let handler_addr = vector_table + (4 * exc_type.number());
       let handler_ptr = from_arm_bytes(load_memory::<4>(self, handler_addr)?);
       self.event_register = true;
+      dbg_ln!("handler address: {:#x}, handler ptr: {:#x}",handler_addr,handler_ptr);
       self.bx_interworking_pc_offset(handler_ptr)
    }
 
@@ -502,7 +507,14 @@ impl System{
       match instr_size{
          InstructionSize::B16 => {
             let code = Opcode::from(maybe_code);
-            println!("{}",code);
+            println!(
+               "@:{:#x} raw {:#x},{:#x} => {} :: {:?}",
+               self.registers.pc as u32,
+               maybe_code[0],
+               maybe_code[1],
+               code,
+               get_operands(&code, maybe_code)
+            );
             match code {
                Opcode::_16Bit(B16::ADD_Imm3)=>{
                   let (dest, src, imm3) = unpack_operands!(
@@ -742,6 +754,7 @@ impl System{
                      Operands::DestImm8,
                      a,i
                   );
+                  println!("opr: {},{}",dest,imm8);
                   self.do_move(dest.0 as usize, imm8.0);
                   return Ok(instr_size.in_bytes() as i32);
                },
@@ -1280,7 +1293,7 @@ impl ArmException{
 
    pub fn return_address(&self,current_address: u32, sync: bool)-> u32{
       let next = (current_address + 2) & 0xFFFFFFFE;
-      println!("{:?}@{} will return to {}",&self,current_address,next);
+      println!("{:?}@{:#x} will return to {:#x}",&self,current_address,next);
       match self{
          ArmException::Reset => panic!("cannot return from reset exception"),
          ArmException::Nmi => next,
