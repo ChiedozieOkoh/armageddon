@@ -5,7 +5,7 @@ use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_se
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
 use crate::dbg_ln;
-use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply} ;
+use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply, xor} ;
 
 use self::instructions::{cond_passed, shift_left, shift_right};
 use self::registers::{Registers, Apsr, SpecialRegister, get_overflow_bit};
@@ -25,6 +25,7 @@ pub struct System{
    pub scs: SystemControlSpace,
    pub mode: Mode,
    primask: bool,
+   pending_primask: Option<bool>,
    pub memory: Vec<u8>,
    pub breakpoints: Vec<usize>
 }
@@ -81,6 +82,7 @@ impl System{
          event_register: false,
          active_exceptions: [ExceptionStatus::Inactive; 48],
          primask: false,
+         pending_primask: None,
          scs: SystemControlSpace::reset(),
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
          memory: vec![0;capacity],
@@ -98,6 +100,7 @@ impl System{
          active_exceptions: [ExceptionStatus::Inactive; 48],
          scs: SystemControlSpace::reset(),
          primask: false,
+         pending_primask: None,
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
          memory: text,
          breakpoints: Vec::new(),
@@ -224,9 +227,17 @@ impl System{
 
    fn bx_interworking_pc_offset(&mut self, addr: u32)->Result<i32, ArmException>{
       if (addr & 0xF0000000 == 0xF0000000) && matches!(self.mode, Mode::Handler){
-         let exc_n = self.exception_return(addr)?;
-         dbg_ln!("returned from exception {}",exc_n);
-         return Ok(0);
+         match self.exception_return(addr){
+            Ok(exc_n) => {
+               dbg_ln!("returned from exception {}",exc_n);
+               return Ok(0);
+            }
+            Err(e)=>{
+               println!("ERR: {:?} occured during exception return",e);
+               self.lockup();
+               return Err(e);
+            }
+         }
       }else{
          let bit = (addr & 0x1) != 0;
          self.set_epsr_t_bit(bit);
@@ -270,7 +281,11 @@ impl System{
 
    fn lockup(&mut self){
       self.registers.pc = 0xFFFFFFFE;
-      panic!("locked up at priority lvl:  {}",self.execution_priority(&self.scs));
+      panic!("locked up at priority lvl:  {}",self.execution_priority(self.primask,&self.scs));
+   }
+
+   pub fn set_exc_pending(&mut self, exc: ArmException){
+      self.active_exceptions[exc.number() as usize] = ExceptionStatus::Pending;
    }
 
    pub fn check_for_exceptions(&mut self){
@@ -282,24 +297,28 @@ impl System{
                   Some(exc) => {
                      println!(
                         "execution == {} exception == {}",
-                        self.execution_priority(&self.scs),
+                        self.execution_priority(self.primask,&self.scs),
                         exc.priority_group(&self.scs)
                      );
-                     if exc.priority_group(&self.scs) < self.execution_priority(&self.scs){
+                     if exc.priority_group(&self.scs) < self.execution_priority(self.primask,&self.scs){
                         match self.init_exception(exc){
-                           Ok(_) => {},
+                           Ok(n) => {
+                              if n.is_some(){
+                                 return;
+                              }
+                           },
                            Err(exc) => {
                               panic!("error during exception entry {:?}",exc);
-                              if self.execution_priority(&self.scs) == -1 || self.execution_priority(&self.scs) == -2{
+                              let current_priority = self.execution_priority(self.primask, &self.scs);
+                              if current_priority == -1 || current_priority == -2{
                                  self.lockup();
                               }
+                              return;
                            },
                         }
                      }
                   },
-                  None => {
-                     println!("WARNING unrecognised pending exception {}",i);
-                  }
+                  None => { println!("WARNING unrecognised pending exception {}",i); }
                }
             },
             _ => {}
@@ -308,7 +327,7 @@ impl System{
    }
 
    fn init_exception(&mut self, exc_type: ArmException)->Result<Option<u32>,ArmException>{
-      if self.execution_priority(&self.scs) < exc_type.priority_group(&self.scs){
+      if self.execution_priority(self.primask,&self.scs) < exc_type.priority_group(&self.scs){
          println!("{:?} exception will remain pending",exc_type);
          self.active_exceptions[exc_type.number() as usize] = ExceptionStatus::Pending;
          self.scs.set_vec_pending(exc_type.number());
@@ -507,7 +526,7 @@ impl System{
       match instr_size{
          InstructionSize::B16 => {
             let code = Opcode::from(maybe_code);
-            println!(
+            dbg_ln!(
                "@:{:#x} raw {:#x},{:#x} => {} :: {:?}",
                self.registers.pc as u32,
                maybe_code[0],
@@ -567,6 +586,56 @@ impl System{
 
                   self.registers.generic[dest.0 as usize] = sum;
                   self.update_apsr(&flags);
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::ADD_REG_SP_IMM8) =>{
+                  let (dest,imm) = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::ADD_REG_SP_IMM8,
+                     a,b
+                  );
+
+                  let (sum,_) = add_immediate(
+                     self.get_sp(),
+                     imm.0
+                  );
+
+                  self.registers.generic[dest.0 as usize] = sum;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::INCR_SP_BY_IMM7) =>{
+                  let imm = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::INCR_SP_BY_IMM7,
+                     a
+                  );
+
+                  let (sum,_) = add_immediate(
+                     self.get_sp(),
+                     imm.0
+                  );
+
+                  self.set_sp(sum)?;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::INCR_SP_BY_REG) => {
+                  let src = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::INCR_SP_BY_REG,
+                     r
+                  );
+
+                  let (sum,_) = add_immediate(
+                     self.get_sp(),
+                     self.read_any_register(src.0)
+                  );
+
+                  self.set_sp(sum)?;
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -666,6 +735,40 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::CPS) => {
+                  let interrupt_flag = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::EnableInterupt,
+                     a
+                  );
+                  if self.execution_priority(interrupt_flag, &self.scs) <= self.execution_priority(self.primask, &self.scs) {
+                     self.primask = interrupt_flag;
+                  }else{
+                     self.pending_primask = Some(interrupt_flag);
+                  }
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::XOR_REG)=>{
+                  let (dest,arg) = unpack_operands!(
+                     get_operands(&code,maybe_code),
+                     Operands::RegisterPair,
+                     a,b
+                  );
+                  
+                  let overflow = get_overflow_bit(self.xpsr);
+                  let (res,flags) = xor(
+                     self.registers.generic[dest.0 as usize],
+                     self.registers.generic[arg.0 as usize], 
+                     overflow
+                  );
+
+                  self.registers.generic[dest.0 as usize] = res;
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+               
                Opcode::_16Bit(B16::SUB_Imm3) => {
                   let (dest,src,imm3) = unpack_operands!(
                      get_operands(&code,maybe_code),
@@ -781,6 +884,40 @@ impl System{
                   self.do_move(dest.0 as usize, v);
                   return Ok(instr_size.in_bytes() as i32);
                },
+
+               Opcode::_16Bit(B16::MVN)=>{
+                  let (dest,src) = unpack_operands!(
+                     get_operands(&code, maybe_code),
+                     Operands::MOV_REG,
+                     a,b
+                  );
+
+                  let v = !self.registers.generic[src.0 as usize];
+                  self.do_move(dest.0 as usize, v);
+                  return Ok(instr_size.in_bytes()as i32);
+               },
+
+               Opcode::_16Bit(B16::ORR)=>{
+                  let (dest,arg) = unpack_operands!(
+                     get_operands(&code, maybe_code),
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let v = self.registers.generic[dest.0 as usize] | self.registers.generic[arg.0 as usize];
+                  self.registers.generic[dest.0 as usize] = v;
+                  let overflow = get_overflow_bit(self.xpsr);
+                  let flags = ConditionFlags{
+                     negative: (0x80000000 & v) > 0,
+                     carry: false,
+                     zero: v == 0,
+                     overflow
+                  };
+
+                  self.update_apsr(&flags); 
+
+                  return Ok(instr_size.in_bytes() as i32);
+               }
 
                Opcode::_16Bit(B16::LDR_REGS)=>{
                   let (dest,base,offset) = unpack_operands!(
@@ -952,6 +1089,15 @@ impl System{
                   Ok(instr_size.in_bytes() as i32)
                },
 
+               Opcode::_16Bit(B16::SVC)=> {
+                  if self.execution_priority(self.primask,&self.scs) == -1 || self.execution_priority(self.primask,&self.scs) == -2{
+                     self.lockup();
+                     Ok(0)
+                  }else{
+                     Err(ArmException::Svc)
+                  }
+               },
+
                Opcode::_16Bit(B16::PUSH) => {
                   let list = unpack_operands!(
                      get_operands(&code, maybe_code),
@@ -1081,6 +1227,20 @@ impl System{
       }
    }
 
+   pub fn reset(&mut self){
+      self.mode = Mode::Thread;
+      self.reset_ipsr();
+      self.primask = false;
+      self.control_register = [0;4];
+      self.scs = SystemControlSpace::reset();
+      self.active_exceptions = [ExceptionStatus::Inactive;48];
+      self.event_register = false;
+      let main_sp_reset_val: u32 = from_arm_bytes(load_memory(&self, self.scs.vtor).unwrap());
+      let reset_handler_ptr: u32 = from_arm_bytes(load_memory(&self,self.scs.vtor + 4).unwrap()) & (!1);
+      self.registers.sp_main = main_sp_reset_val;
+      self.registers.pc = reset_handler_ptr as usize;
+   }
+
    fn do_move(&mut self, dest: usize, value: u32){
       self.registers.generic[dest] = value;
       let mut new_xpsr =  from_arm_bytes(self.xpsr);
@@ -1156,9 +1316,9 @@ impl System{
       }
    }
 
-   pub fn execution_priority(&self, scs: &SystemControlSpace)->i32{
+   fn execution_priority(&self,primask: bool, scs: &SystemControlSpace)->i32{
       let mut cur_priority: i32 = 4;
-      let boosted_priority = if self.primask {0}else{4};
+      let boosted_priority = if primask {0}else{4};
 
       for (i,status) in self.active_exceptions.iter().enumerate(){
          match status{
@@ -1168,7 +1328,7 @@ impl System{
                cur_priority = std::cmp::min(cur_priority,exc_priority);
             },
             _ => {}
-        }
+         }
       }
 
       std::cmp::min(cur_priority,boosted_priority)

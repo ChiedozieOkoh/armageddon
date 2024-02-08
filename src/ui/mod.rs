@@ -198,6 +198,8 @@ fn user_cmds<'a>(bkpt: &BkptInput)->Element<'a, Event>{
    row![
       button(text("step").size(TEXT_SIZE)).on_press(Event::Dbg(Debug::Step)),
       button(text("continue").size(TEXT_SIZE)).on_press(Event::Dbg(Debug::Continue)),
+      button(text("halt").size(TEXT_SIZE)).on_press(Event::Ui(Gui::SubmitHalt)),
+      button(text("reset").size(TEXT_SIZE)).on_press(Event::Dbg(Debug::Reset)),
       bkpt_button
    ].spacing(5).into()
 }
@@ -481,69 +483,83 @@ impl Application for App{
          let mut exit = false;
          loop{
             match rcvr.select_next_some().await{
-                Event::Ui(e) => panic!("invalid cmd sent to simulator loop {:?}",e),
-                Event::Dbg(Debug::Halt(_)) => {
-                   continue_mode = false;
-                },
+               Event::Ui(e) => panic!("invalid cmd sent to simulator loop {:?}",e),
+               Event::Dbg(Debug::Reset)=>{
+                  let mut sys = async_copy.lock().unwrap();
+                  continue_mode = false;
+                  sys.reset();
+                  halt = Some(HaltType::usercmd);
+               }
 
-                Event::Dbg(Debug::CreateBreakpoint(addr))=>{
-                   let mut sys = async_copy.lock().unwrap();
-                   sys.add_breakpoint(addr);
-                },
+               Event::Dbg(Debug::Halt(HaltType::usercmd)) => {
+                  continue_mode = false; 
+                  halt = Some(HaltType::usercmd);
+               },
 
-                Event::Dbg(Debug::DeleteBreakpoint(addr))=>{
-                   let mut sys = async_copy.lock().unwrap();
-                   sys.remove_breakpoint(addr);
-                },
+               Event::Dbg(Debug::CreateBreakpoint(addr))=>{
+                  let mut sys = async_copy.lock().unwrap();
+                  sys.add_breakpoint(addr);
+               },
 
-                Event::Dbg(Debug::Disconnect) => {
-                   if !exit{
-                      exit = true;
-                   }
-                   if !output.is_closed(){
-                      output.close_channel();
-                   }
-                },
-                Event::Dbg(Debug::Continue) => {
-                   continue_mode = true;
-                   while continue_mode{
-                      let mut sys = async_copy.lock().unwrap();
-                      if sys.on_breakpoint(){
-                         continue_mode = false;
-                         halt = Some(HaltType::breakpoint);
-                      }else{
-                         match Simulator::step_or_signal_halt_type(&mut sys){
-                            Ok(_)=> {},
-                            Err(e) => {continue_mode = false; halt = Some(e);}
-                         }
-                      }
-                      match rcvr.try_next(){
-                         Ok(event) => match event{
-                            Some(eve) => match eve{
-                               Event::Dbg(Debug::Halt(_)) => {
-                                  continue_mode = false;
-                               },
-                               Event::Dbg(Debug::Disconnect) => {
-                                  continue_mode = false;
-                                  exit = true;
-                                  output.close_channel();
-                               },
-                               Event::Dbg(e) => {
-                                  panic!("invalid cmd {:?} sent to simulator loop", e)
-                               },
-                               Event::Ui(e) => {panic!("invalid cmd {:?} sent to sim loop", e)}
-                            },
-                            None => todo!(),
-                         },
-                         Err(_) => { },
-                      }
-                   }
-                },
-                Event::Dbg(e) => panic!("invalid cmd sent to simulator loop {:?}", e),
+               Event::Dbg(Debug::DeleteBreakpoint(addr))=>{
+                  let mut sys = async_copy.lock().unwrap();
+                  sys.remove_breakpoint(addr);
+               },
+
+               Event::Dbg(Debug::Disconnect) => {
+                  if !exit{
+                     exit = true;
+                  }
+                  if !output.is_closed(){
+                     output.close_channel();
+                  }
+               },
+               Event::Dbg(Debug::Continue) => {
+                  continue_mode = true;
+                  while continue_mode{
+                     let mut sys = async_copy.lock().unwrap();
+                     if sys.on_breakpoint(){
+                        continue_mode = false;
+                        halt = Some(HaltType::breakpoint);
+                     }else{
+                        match Simulator::step_or_signal_halt_type(&mut sys){
+                           Ok(_)=> {},
+                           Err(e) => {continue_mode = false; halt = Some(e);}
+                        }
+                     }
+                     match rcvr.try_next(){
+                        Ok(event) => match event{
+                           Some(eve) => match eve{
+                              Event::Dbg(Debug::Halt(e)) => {
+                                 continue_mode = false;
+                                 halt = Some(e);
+                              },
+                              Event::Dbg(Debug::Disconnect) => {
+                                 continue_mode = false;
+                                 exit = true;
+                                 output.close_channel();
+                              },
+                              Event::Dbg(Debug::Reset)=>{
+                                 continue_mode = false;
+                                 sys.reset();
+                                 halt = Some(HaltType::usercmd);
+                              },
+                              Event::Dbg(e) => {
+                                 panic!("invalid cmd {:?} sent to simulator loop", e)
+                              },
+                              Event::Ui(e) => {panic!("invalid cmd {:?} sent to sim loop", e)}
+                           },
+                           None => todo!(),
+                        },
+                        Err(_) => { },
+                     }
+                  }
+               },
+               Event::Dbg(e) => panic!("invalid cmd sent to simulator loop {:?}", e),
             }
             match halt{
                 Some(h) => {
-                   output.send(Event::Dbg(Debug::Halt(h))).await;
+                   let _ = output.send(Event::Dbg(Debug::Halt(h))).await;
                    halt = None;
                 },
                 None => {},
@@ -629,6 +645,16 @@ impl Application for App{
             }
          },
 
+         Event::Ui(Gui::SubmitHalt)=>{
+            match self.cmd_sender{
+               Some(ref mut sndr)=>{
+                  println!("sending halt to dbg session");
+                  let _ = sndr.try_send(Event::Dbg(Debug::Halt(HaltType::usercmd)));
+               },
+               None => {panic!("cannot interact with dbg session")}
+            }
+         },
+
          Event::Ui(Gui::SetBkptInput(input)) => {
             self.bkpt_input.pending_addr_or_symbol = input;
          },
@@ -677,6 +703,19 @@ impl Application for App{
                None => {},
             }
          },
+         Event::Dbg(Debug::Reset)=>{
+            match self.cmd_sender.as_mut(){
+               Some(sndr)=>{
+                  sndr.try_send(Event::Dbg(Debug::Reset)).unwrap();
+               },
+               None =>{
+                  println!("WARN: cannot interact with debug session");
+                  let mut sys = self.sync_sys.try_lock().unwrap();
+                  sys.reset();
+                  self.sys_view = sys.deref().into();
+               }
+            }
+         },
          Event::Dbg(Debug::Halt(_type))=>{
             println!("dbg session halted due to {:?}",_type);
             let sys = self.sync_sys.try_lock().unwrap();
@@ -714,6 +753,7 @@ pub enum Debug{
    Continue,
    Step,
    Disconnect,
+   Reset,
    CreateBreakpoint(u32),
    DeleteBreakpoint(u32),
    Connect(iced_mpsc::Sender<Event>)
@@ -726,7 +766,8 @@ pub enum Gui{
    ClosePane(pane_grid::Pane),
    Exp(Explorer),
    SetBkptInput(String),
-   SubmitBkpt
+   SubmitBkpt,
+   SubmitHalt
 }
 
 #[derive(Debug,Clone)]

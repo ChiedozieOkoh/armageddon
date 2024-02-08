@@ -157,3 +157,15 @@ pub fn shift_left(a: u32, shift: u32, overflow: bool)->(u32,ConditionFlags){
    };
    return (result,flags);
 }
+
+pub fn xor(a: u32, b: u32, overflow: bool)->(u32,ConditionFlags){
+   let r = a^b;
+   let flags = ConditionFlags{
+      carry: false,
+      negative: (r & 0x80000000) > 0,
+      zero: r == 0,
+      overflow
+   };
+
+   return (r,flags);
+}

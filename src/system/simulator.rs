@@ -6,7 +6,8 @@ use crate::ui::Debug;
 #[derive(Clone,Debug)]
 pub enum HaltType{
    error(ArmException),
-   breakpoint
+   breakpoint,
+   usercmd
 }
 
 pub struct Simulator;
@@ -17,7 +18,11 @@ impl Simulator{
    pub fn step_or_signal_halt(sys: &mut System)->Result<(),Debug>{
       match sys.step(){
          Ok(offset) => Self::halt_if_err(sys.offset_pc(offset)),
-         Err(e) => Err(Debug::Halt(HaltType::error(e))),
+         Err(e) => {
+            sys.set_exc_pending(e);
+            sys.check_for_exceptions();
+            return Ok(());
+         },
       }
    }
 
@@ -27,7 +32,11 @@ impl Simulator{
             Ok(_) => Ok(()),
             Err(ex) => Err(HaltType::error(ex)),
          },
-         Err(e) => Err(HaltType::error(e)),
+         Err(e) => {
+            sys.set_exc_pending(e);
+            sys.check_for_exceptions();
+            return Ok(());
+         },
       }
    }
 

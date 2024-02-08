@@ -182,9 +182,19 @@ fn load_code_into_system(entry_point: usize, code: &[u8])->Result<System, ArmExc
 
 #[test]
 pub fn should_do_add()->Result<(),std::io::Error>{
+   let code = concat!(
+      ".thumb\n",
+      ".text\n",
+      "ADD r0,r1\n",
+      "ADD r0,r1,#2\n",
+      "ADD r0,#200\n",
+      "ADD r0,r1\n",
+      "ADD r4,SP,#1004\n",
+      "ADD SP,#212\n"
+   );
    run_assembly(
       &Path::new("sim_add.s"),
-      b".thumb\n.text\nADD r0,r1\nADD r0,r1,#2\nADD r0,#200\nADD r0,r1",
+      code.as_bytes(),
       |entry_point, code|{
          let mut sys = load_code_into_system(entry_point, code)?;
          println!("memory: {:?}",sys.memory);
@@ -206,6 +216,18 @@ pub fn should_do_add()->Result<(),std::io::Error>{
          sys.set_pc(sys.registers.pc + 2)?;
          sys.step()?;
          assert_eq!(sys.registers.generic[0], 0xF0000000 + 1);
+
+         let sp_value = 320;
+         sys.registers.sp_main = sp_value;
+         sys.registers.sp_process = sp_value;
+         sys.set_pc(sys.registers.pc + 2)?;
+         sys.step()?;
+         assert_eq!(sys.registers.generic[4],1004 + sp_value);
+
+         sys.set_pc(sys.registers.pc + 2)?;
+         sys.step()?;
+         assert_eq!(sys.get_sp(),212 + sp_value);
+
          return Ok(());
       }
    )?;
@@ -796,6 +818,11 @@ pub fn exception_preemption_test()->Result<(),std::io::Error>{
       Ok(())
    })?;
 
+   Ok(())
+}
+
+#[test]
+pub fn can_disable_interrupts()->Result<(),std::io::Error>{
    Ok(())
 }
 
