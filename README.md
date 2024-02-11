@@ -77,11 +77,17 @@ SECTIONS{
 * link the binary `arm-none-eabi-ld code.elf -T link.ld -o code.o`
 * finally simulate the linked executable `armageddon code.o` 
 
+## Memory Usage
+Currently the size of memory available to the simulator is the same as the size of the \
+ELF file passed as a command line arguement. 
+
 ## Notes On compatability with ARMv6-M ISA 
 The simulator is still in development so not all instructions are implemented yet.\
-Though ARMv6-M is a memory mapped architecture most of the memory mapped system configuration
-registers have not been implemented yet, its a work in progress. \
-Exceptions are functional the vector table offset is always 0 and is not configurable. \
+The memory mapped registers of the system control space (SCS) are partially implemented.\
+You can use the ICSR to trigger NMI and PendSV interrupts. It can also trigger SysTick interrupts but currently the SysTick configuration registers are not implemented yet. \
+The SHPR2 and SHPR3 registers can be used to change the priority of SVCall, SysTick and PendSV. \
+There is no instruction pipeline in the simulator thus all reads and writes are committed instantly. \
+The vector table offset is always 0 and is not configurable. \
 
 # Feedback
 If you encounter any bugs please open an issue :)
@@ -89,7 +95,6 @@ If you encounter any bugs please open an issue :)
 # TODO List
 - [x] Add `check_exception()` logic to simulation on UI thread
 - [X] Add Halt and Reset button to UI
-- [ ] Add Memory Mapped SCS
-- [ ] Support NMI through memory mapped SCS
+- [X] Support NMI through memory mapped SCS
 - [ ] Allow breakpoints to be added by clicking on a line of text in the disassembly
 

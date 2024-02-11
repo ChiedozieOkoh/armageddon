@@ -452,7 +452,7 @@ impl System{
       let mut nested_exceptions = 0;
       for status in self.active_exceptions.iter(){
          match status{
-            ExceptionStatus::Active => {
+            ExceptionStatus::Active | ExceptionStatus::ActiveAndPending => {
                nested_exceptions += 1;
             },
             _ => {},
@@ -484,9 +484,19 @@ impl System{
          _ => panic!("invalid exception return type {}",exc_ret_type)
       }
 
-      self.active_exceptions[handled_exception as usize] = ExceptionStatus::Inactive;
-      self.scs.clear_vec_active();
+      let status = self.active_exceptions[handled_exception as usize];
+      match status{
+         ExceptionStatus::Active => {
+            self.active_exceptions[handled_exception as usize] = ExceptionStatus::Inactive;
+         },
+         ExceptionStatus::ActiveAndPending=>{
+            self.active_exceptions[handled_exception as usize] = ExceptionStatus::Pending;
+         },
+         state => {panic!("exception returned from a {:?} handler",state)}
+      }
 
+      self.scs.clear_vec_active();
+      self.scs.clear_vec_pending();
       self.load_context_frame(return_address)?;
       match self.mode{
          Mode::Thread => assert!(self.get_ipsr() == 0,"Thread mode must mean IPSR is 0"),
@@ -741,11 +751,7 @@ impl System{
                      Operands::EnableInterupt,
                      a
                   );
-                  if self.execution_priority(interrupt_flag, &self.scs) <= self.execution_priority(self.primask, &self.scs) {
-                     self.primask = interrupt_flag;
-                  }else{
-                     self.pending_primask = Some(interrupt_flag);
-                  }
+                  self.primask = interrupt_flag;
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1090,11 +1096,16 @@ impl System{
                },
 
                Opcode::_16Bit(B16::SVC)=> {
-                  if self.execution_priority(self.primask,&self.scs) == -1 || self.execution_priority(self.primask,&self.scs) == -2{
+                  let priority = self.execution_priority(self.primask, &self.scs);
+                  if priority == -1 || priority == -2{
                      self.lockup();
                      Ok(0)
                   }else{
-                     Err(ArmException::Svc)
+                     if priority < ArmException::Svc.priority_group(&self.scs){
+                        Err(ArmException::HardFault("SVC priority escalation fault".into()))
+                     }else{
+                        Err(ArmException::Svc)
+                     }
                   }
                },
 
@@ -1333,6 +1344,7 @@ impl System{
 
       std::cmp::min(cur_priority,boosted_priority)
    }
+
 }
 
 pub fn is_thread_privileged(sys: &System)->bool{
@@ -1358,13 +1370,45 @@ fn fault_if_not_aligned(addr: u32, alignment_in_bytes: usize)->Result<(), ArmExc
    }
 }
 
+fn write_to_memory_mapped_register(sys: &mut System, address: u32, v: u32)->Result<(),ArmException>{
+   assert!(is_region_ppb(address));
+   if !sys.in_privileged_mode(){
+      return Err(ArmException::HardFault("Access to PPB must be privileged".into()));
+   }
+   fault_if_not_aligned(address, 4)?;
+   let ppb_register = MemoryMappedRegister::from_address(address).unwrap();
+   ppb_register.update(sys, v);
+   return Ok(());
+}
+
+fn load_memory_mapped_register(sys: &System, address: u32)->Result<u32,ArmException>{
+   assert!(is_region_ppb(address));
+   fault_if_not_aligned(address, 4)?;
+   let system_register = MemoryMappedRegister::from_address(address).unwrap();
+   return Ok(system_register.read(sys));
+}
+
 pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],ArmException>{
-   fault_if_not_aligned(v_addr, T)?;
-   sys.check_permission(v_addr, Access::READ)?;
-   let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
-      .try_into()
-      .expect("should not access out of bounds memory");
-   return Ok(mem);
+   if is_region_ppb(v_addr){
+      if T == 4{
+         let v = load_memory_mapped_register(sys,v_addr)?;
+         let mem_arr = into_arm_bytes(v);
+         let mem: [u8;T] = mem_arr[0 .. T]
+            .try_into()
+            .expect("these are definately the same size");
+
+         return Ok(mem);
+      }else{
+         return Err(ArmException::HardFault("Reads from PPB must be word aligned".into()));
+      }
+   }else{
+      fault_if_not_aligned(v_addr, T)?;
+      sys.check_permission(v_addr, Access::READ)?;
+      let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
+         .try_into()
+         .expect("should not access out of bounds memory");
+      return Ok(mem);
+   }
 }
 
 pub fn load_thumb_instr(sys: &System, v_addr: u32)->Result<[u8;2],ArmException>{
@@ -1400,10 +1444,20 @@ pub fn load_memory<'a, const T: usize>(sys: &'a System, v_addr: u32)->Result<&'a
 */
 
 pub fn write_memory<const T: usize>(sys: &mut System, v_addr: u32, value: [u8;T])->Result<(), ArmException>{
-   fault_if_not_aligned(v_addr, T)?;
-   sys.check_permission(v_addr, Access::WRITE)?;
-   sys.memory[v_addr as usize ..(v_addr as usize + T )].copy_from_slice(&value);
-   return Ok(());
+   if is_region_ppb(v_addr){
+      if T == 4{
+         let mem: [u8;4] = value[0..4].try_into().expect("size of write already valid");
+         let value = from_arm_bytes(mem);
+         return write_to_memory_mapped_register(sys, v_addr, value);
+      }else{
+         return Err(ArmException::HardFault("Writes to PPB must be word aligned".into()));
+      }
+   }else{
+      fault_if_not_aligned(v_addr, T)?;
+      sys.check_permission(v_addr, Access::WRITE)?;
+      sys.memory[v_addr as usize ..(v_addr as usize + T )].copy_from_slice(&value);
+      return Ok(());
+   }
 }
 
 fn is_aligned(v_addr: u32, size: u32)->bool{
@@ -1432,7 +1486,7 @@ pub enum ArmException{
 
 impl ArmException{
    pub fn from_xpsr(sys: &System)->Option<Self>{
-      let ipsr = from_arm_bytes(sys.xpsr) & 0x2F;
+      let ipsr = from_arm_bytes(sys.xpsr) & 0x3F;
       return Self::from_exception_number(ipsr);
    }
 
@@ -1502,17 +1556,186 @@ impl ArmException{
    }
 }
 
+enum MemoryMappedRegister{
+   icsr,
+   vtor,
+   aircr,
+   scr,
+   ccr,
+   shpr2,
+   shpr3
+}
+
+impl MemoryMappedRegister{
+   pub fn from_address(address: u32)->Option<MemoryMappedRegister>{
+      match address{
+         0xE000ED04 =>{
+            Some(Self::icsr)
+         },
+         0xE000ED08 =>{
+            Some(Self::vtor)
+         },
+         0xE000ED0C=>{
+            Some(Self::aircr)
+         },
+         0xE000ED10=>{
+            Some(Self::scr)
+         },
+         0xE000ED14=>{
+            Some(Self::ccr)
+         },
+
+         0xE000ED1C=>{
+            Some(Self::shpr2)
+         },
+
+         0xE000ED20=>{
+            Some(Self::shpr3)
+         },
+
+         _ => todo!("WARN: {} PPB region has not been implemented yet",address)
+      }
+   }
+
+   pub fn read(&self, sys: &System)->u32{
+      match self{
+         MemoryMappedRegister::icsr => sys.scs.icsr,
+         MemoryMappedRegister::vtor => 0,
+         MemoryMappedRegister::aircr => 0,
+         MemoryMappedRegister::scr => 0,
+         MemoryMappedRegister::ccr => 0x208,
+         MemoryMappedRegister::shpr2 => sys.scs.shpr2,
+         MemoryMappedRegister::shpr3 => sys.scs.shpr3,
+      }
+   }
+
+   pub fn update(&self, sys: &mut System, v: u32){
+      match self{
+         MemoryMappedRegister::icsr => { 
+            if 0x80000000 & v > 0{
+               let n = ArmException::Nmi.number();
+               dbg_ln!("write to ICSR.NMI_PEND_SET will trigger NMI");
+               sys.active_exceptions[n as usize] = ExceptionStatus::Pending;
+            }
+
+            if 0x10000000 & v > 0{
+               let n = ArmException::PendSV.number();
+               dbg_ln!("write to ICSR.PendSV_SET ,PendSV is pending");
+               match sys.active_exceptions[n as usize]{
+                  ExceptionStatus::Inactive => {
+                     dbg_ln!("write to ICSR.PendSV_SET ,PendSV is pending");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::Pending;
+                  },
+                  ExceptionStatus::Active => {
+                     dbg_ln!("write to ICSR.PendSV_SET ,PendSV is active & pending");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::ActiveAndPending;
+                  },
+                  ExceptionStatus::Pending | ExceptionStatus::ActiveAndPending => {
+                     dbg_ln!("write to ICSR.PendSV_SET ignored, PendSV already pending");
+                  }
+               }
+            }
+
+            if 0x08000000 & v > 0{
+               let n = ArmException::PendSV.number();
+               match sys.active_exceptions[n as usize]{
+                  ExceptionStatus::Pending =>{
+                     dbg_ln!("write to ICSR.PendSv_CLR will clear pending interrupt");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::Inactive;
+                  },
+                  ExceptionStatus::ActiveAndPending=>{
+                     dbg_ln!("write to ICSR.PendSv_CLR will clear pending interrupt");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::Active;
+                  },
+                  status =>{
+                     dbg_ln!("PendSV is already {:?}, it cannot be cleared",status);
+                  }
+               }
+            }
+
+            if 0x04000000 & v > 0{
+               let n = ArmException::SysTick.number();
+               match sys.active_exceptions[n as usize]{
+                  ExceptionStatus::Inactive =>{
+                     dbg_ln!("write to ICSR.PendST_Set SysTick pending");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::Pending;
+                  },
+                  ExceptionStatus::Active=>{
+                     dbg_ln!("write to ICSR.PendST_Set active & pending");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::ActiveAndPending;
+                  },
+                  status =>{
+                     dbg_ln!("PendSV is already {:?}, it cannot be set pending",status);
+                  }
+               }
+            }
+
+            if 0x02000000 & v > 0{
+               let n = ArmException::SysTick.number();
+               match sys.active_exceptions[n as usize]{
+                  ExceptionStatus::Pending =>{
+                     dbg_ln!("write to ICSR.PendST_CLR will clear pending interrupt");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::Inactive;
+                  },
+                  ExceptionStatus::ActiveAndPending=>{
+                     dbg_ln!("write to ICSR.PendST_CLR will clear pending interrupt");
+                     sys.active_exceptions[n as usize] = ExceptionStatus::Active;
+                  },
+                  status =>{
+                     dbg_ln!("PendSV is already {:?}, it cannot be cleared",status);
+                  }
+               }
+
+            }
+            sys.scs.icsr = v; 
+         },
+         MemoryMappedRegister::vtor => {dbg_ln!("WARN: writes to VTOR are ignored");},
+         MemoryMappedRegister::aircr => {
+            if v & 0x4 > 0 {
+               dbg_ln!("Write to AIRCR.SYS_RESET_REQ system reset initialised");
+               sys.reset();
+            }
+         },
+         MemoryMappedRegister::scr => {
+            dbg_ln!("WARN: SCR is not implemented");
+            sys.scs.scr = v;
+         },
+         MemoryMappedRegister::ccr => {
+            dbg_ln!("WARN: CCR is readonly");
+         },
+         MemoryMappedRegister::shpr2 => {
+            sys.scs.shpr2 = (v & 0x80000000);
+         },
+         MemoryMappedRegister::shpr3 => {
+            sys.scs.shpr3 = (v & 0x80800000);
+         },
+      }
+   }
+}
+
 pub struct SystemControlSpace{
    pub icsr: u32,
    pub vtor: u32,
-   shpr2: u32,
-   shpr3: u32,
+   pub aircr: u32,
+   pub scr: u32,
+   pub ccr: u32,
+   pub shpr2: u32,
+   pub shpr3: u32,
    ipr: [u32;8]
 }
 
 impl SystemControlSpace{
    pub fn reset()->Self{
-      Self { icsr: 0, vtor: 0, shpr2: 0, shpr3: 0, ipr: [0; 8] }
+      Self { 
+         icsr: 0,
+         vtor: 0,
+         aircr: 0,
+         scr: 0,
+         ccr: 0x108,
+         shpr2: 0,
+         shpr3: 0,
+         ipr: [0; 8] 
+      }
    }
 
    pub fn set_vec_active(&mut self, exc_n: u32){

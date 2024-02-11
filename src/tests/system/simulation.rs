@@ -822,7 +822,218 @@ pub fn exception_preemption_test()->Result<(),std::io::Error>{
 }
 
 #[test]
-pub fn can_disable_interrupts()->Result<(),std::io::Error>{
+pub fn vtor_support()->Result<(),std::io::Error>{
+   let code = b".thumb
+      .text
+      LDR r0, =0xE000ED08
+      MOV r1,#233
+      STR r1,[r0,#0]
+      MOV r2,#0
+      MOV r3,#48
+      LDR r3,[r0,r2]
+      ";
+
+   run_assembly(
+      Path::new("sim_vtor.s"),
+      code,
+      |entry_point, code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+         assert_eq!(sys.scs.vtor,0);
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;//writes to VTOR should be ignored
+         sys.offset_pc(i)?;
+         assert_eq!(sys.scs.vtor,0);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[3],48);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[3],0);
+         Ok(())
+      }
+   )?;
+   return Ok(());
+}
+
+#[test]
+pub fn ccr_test()->Result<(),std::io::Error>{
+   let code = b".thumb
+         .text
+         LDR r0,=0xE000ED14
+         LDR r1,[r0,#0]
+         MOV r2,#1
+         STR r2,[r0,#0]
+         LDR r1,[r0,#0]
+      ";
+
+   run_assembly(
+      Path::new("sim_ccr.s"),
+      code,
+      |entry_point,code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[1],0x208);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_ne!(sys.scs.ccr,1);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.registers.generic[1],0x208,"CCR is readonly");
+         Ok(())
+      }
+   )?;
+
+   Ok(())
+}
+
+#[test]
+pub fn software_interrupt_triggers()->Result<(),std::io::Error>{
+   let code = b".thumb
+         .text
+         NOP
+         LDR r0,=0xE000ED04
+         LDR r1,=0x80000000
+         STR r1,[r0,#0]
+         LDR r1,=0x10000000
+         STR r1,[r0,#0]
+         LDR r1,=0x08000000
+         STR r1,[r0,#0]
+         LDR r1,=0x04000000
+         STR r1,[r0,#0]
+         LDR r1,=0x02000000
+         STR r1,[r0,#0]
+      ";
+
+   run_assembly_armv6m(
+      Path::new("sim_sw_int_pri.s"),
+      code, 
+      |entry_point, code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         for status in sys.active_exceptions{
+            assert!(matches!(status,ExceptionStatus::Inactive));
+         }
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let n = ArmException::Nmi.number() as usize;
+         assert!(matches!(sys.active_exceptions[n],ExceptionStatus::Pending));
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let n = ArmException::PendSV.number() as usize;
+         assert!(matches!(sys.active_exceptions[n],ExceptionStatus::Pending));
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let n = ArmException::PendSV.number() as usize;
+         assert!(matches!(sys.active_exceptions[n],ExceptionStatus::Inactive));
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let n = ArmException::SysTick.number() as usize;
+         assert!(matches!(sys.active_exceptions[n],ExceptionStatus::Pending));
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let n = ArmException::SysTick.number() as usize;
+         assert!(matches!(sys.active_exceptions[n],ExceptionStatus::Inactive));
+         Ok(())
+      }
+   )?;
+   Ok(())
+}
+
+#[test]
+pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
+   let code = b".thumb
+         .text
+         NOP
+         LDR r0,=0xE000ED1C
+         LDR r1,=0x80000000
+         STR r1,[r0,#0]
+         LDR r0,=0xE000ED20
+         LDR r1,=0x80800000
+         STR r1,[r0,#0]
+      ";
+   run_assembly_armv6m(
+      Path::new("sim_sw_int_pri.s"),
+      code, 
+      |entry_point, code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(ArmException::Svc.priority_group(&sys.scs),0);
+         assert_eq!(ArmException::SysTick.priority_group(&sys.scs),0);
+         assert_eq!(ArmException::PendSV.priority_group(&sys.scs),0);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(ArmException::Svc.priority_group(&sys.scs),1);
+         assert_eq!(sys.scs.shpr2 & 1 << 31,1 <<31);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(ArmException::SysTick.priority_group(&sys.scs),1);
+         assert_eq!(ArmException::PendSV.priority_group(&sys.scs),1);
+         assert_eq!(sys.scs.shpr3 & 1 << 31,1 << 31);
+         assert_eq!(sys.scs.shpr3 & 1 << 23,1 << 23);
+         Ok(())
+      }
+   )?;
+
    Ok(())
 }
 
