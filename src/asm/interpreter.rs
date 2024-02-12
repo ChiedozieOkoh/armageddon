@@ -134,7 +134,7 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<SymbolDefinit
          let symbol = sym_table.lookup(byte_offset);
          let mut line = String::new(); 
          if symbol.is_some(){
-            line.push_str(&format!("\n{:#010x} <",byte_offset));
+            line.push_str(&format!("\n{:#010x}: <",byte_offset));
             line.push_str(symbol.unwrap());
             line.push_str(">:\n");
          }

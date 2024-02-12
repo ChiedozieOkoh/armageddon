@@ -5,13 +5,14 @@ use iced::widget::text_input;
 
 use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b, elf::decoder::SymbolDefinition};
 
+use crate::dbg_ln;
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
 
 pub struct App{
    _state: pane_grid::State<PaneType>,
    n_panes: usize,
-   focus: Option<pane_grid::Pane>,
+   diasm_win_id: iced::widget::scrollable::Id,
    entry_point: usize,
    pub disasm: String,
    symbols: Vec<SymbolDefinition>,
@@ -85,6 +86,10 @@ impl Display for SystemView{
             self.xpsr
       )
    }
+}
+
+struct Focus{
+   pub window_id: iced::widget::scrollable::Id,
 }
 
 struct BkptInput{
@@ -270,6 +275,7 @@ fn pane_render<'a>(
          let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![text_widget];
          text_box = text_box.spacing(0).padding(0);
          let mut un_highlighted = String::new();
+
          for line in app.disasm.lines().skip(1){
             if line.contains("<"){
                //if !un_highlighted.trim().is_empty(){
@@ -346,7 +352,7 @@ fn pane_render<'a>(
             text_box = text_box.push(text(&un_highlighted).size(TEXT_SIZE).width(iced::Length::Fill));
          }
          //let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill).style(iced::color!(100,0,0));
-         container(scrollable(text_box))
+         container(scrollable(text_box).id(app.diasm_win_id.clone()))
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
@@ -437,12 +443,13 @@ impl Application for App{
    type Executor = executor::Default;
 
    fn new(args: Self::Flags)->(Self,Command<Event>){
-      let (state,first) = pane_grid::State::new(PaneType::Disassembler);
+      let (state,_) = pane_grid::State::new(PaneType::Disassembler);
       
       let (sys,entry_point, symbols) = args;
       let disasm = disasm_text(&sys.memory, entry_point, &symbols);
       let starting_view: SystemView = (&sys).into();
       let sync_sys_arc = Arc::new(Mutex::new(sys));
+      let disasm_id = iced::widget::scrollable::Id::unique();
       let mut msg = String::new(); 
       for i in disasm.into_iter(){
          msg.push_str(&i);
@@ -451,7 +458,7 @@ impl Application for App{
       (Self{
          _state: state,
          n_panes: 1,
-         focus: Some(first),
+         diasm_win_id: disasm_id,
          sync_sys: sync_sys_arc,
          disasm: msg,
          entry_point,
@@ -473,9 +480,25 @@ impl Application for App{
     }
 
    fn subscription(&self) -> iced::Subscription<Self::Message> {
+      use iced::keyboard::Event as KeyEvent;
+      let shortcuts = iced::subscription::events_with(|event, status|{
+         match event{
+            iced::Event::Keyboard(KeyEvent::KeyReleased { key_code, modifiers }) => match key_code{
+                iced::keyboard::KeyCode::Enter => {
+                   if modifiers.alt(){
+                      Some(Event::Ui(Gui::CentreDisassembler))
+                   }else{
+                      None
+                   }
+                },
+                _ => None,
+            },
+            _ => None
+         }
+      });
       let async_copy = self.sync_sys.clone();
       //assert_eq!(2,Arc::strong_count(&async_copy),"only one instance runs in continue mode, only one instance runs in step mode");
-      iced::subscription::channel(0, 1, |mut output| async move {
+      let sim_runtime = iced::subscription::channel(0, 1, |mut output| async move {
          let (sndr, mut rcvr)  = iced_mpsc::channel(10);
          output.send(Event::Dbg(Debug::Connect(sndr))).await;
          let mut continue_mode = false;
@@ -565,10 +588,12 @@ impl Application for App{
                 None => {},
             }
          }
-      })
+      });
+      iced::subscription::Subscription::batch(vec![shortcuts,sim_runtime])
    }
 
    fn update(&mut self, message: Event) -> Command<Self::Message> {
+      let mut cmd = Command::none();
       match message{
          Event::Ui(Gui::SplitPane(pane,kind, axis)) => {
             self._state.split(axis, &pane, kind);
@@ -580,6 +605,35 @@ impl Application for App{
          Event::Ui(Gui::ClosePane(pane)) => {
             self._state.close(&pane);
             self.n_panes -= 1;
+         },
+
+         Event::Ui(Gui::CentreDisassembler)=>{
+            let ir = self.sys_view.raw_ir;
+            let mut ir_ln = 0_u32;
+            let mut line_number = 0_u32;
+            for line in self.disasm.lines(){
+               if !line.trim().is_empty(){
+                  let offset = line.split(":").next();
+
+                  match offset{
+                     Some(address) => {
+                        dbg_ln!("parsing {}",address);
+                        let add_v = u32::from_str_radix(
+                           address.trim().trim_start_matches("0x").trim(),
+                           16
+                        ).unwrap();
+                        if add_v == ir{
+                           ir_ln = line_number;
+                        }
+                     },
+                     _ => {}
+                  }
+               }
+               line_number += 1;
+            }
+            let y_ratio = (ir_ln as f32) / line_number as f32;
+            dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,line_number,y_ratio);
+            cmd = iced::widget::scrollable::snap_to(self.diasm_win_id.clone(), scrollable::RelativeOffset { x: 0.0, y: y_ratio });
          },
 
          Event::Ui(Gui::Exp(Explorer::Update)) => { 
@@ -694,6 +748,7 @@ impl Application for App{
             self.cmd_sender = Some(sender);
             println!("connected with dbg thread");
          },
+
          Event::Dbg(Debug::Continue) => {
             assert!(self.cmd_sender.is_some(),"cannot use continue dbg thread not connected");
             match self.cmd_sender.as_mut(){
@@ -724,7 +779,7 @@ impl Application for App{
          _ => todo!()
       }
 
-      Command::none()
+      cmd
     }
 
    fn view(&self) -> iced::Element<'_, Self::Message, iced::Renderer<Self::Theme>> {
@@ -767,7 +822,8 @@ pub enum Gui{
    Exp(Explorer),
    SetBkptInput(String),
    SubmitBkpt,
-   SubmitHalt
+   SubmitHalt,
+   CentreDisassembler
 }
 
 #[derive(Debug,Clone)]
