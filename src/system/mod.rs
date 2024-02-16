@@ -1200,10 +1200,15 @@ impl System{
          InstructionSize::B32 => {
             let word: [u8;4] = load_instr_32b(&self, self.registers.pc as u32)?;
             let instr_32b = Opcode::from(word);
+            let operands = get_operands_32b(&instr_32b, word);
+            if self.trace_enabled{
+               self.trace.push_str(&print_instruction(self.registers.pc as u32 , &instr_32b, &operands));
+               self.trace.push('\n');
+            }
             match instr_32b{
                Opcode::_32Bit(B32::MSR) => {
                   let (special, src) = unpack_operands!(
-                     get_operands_32b(&instr_32b, word),
+                     operands,
                      Operands::MSR,
                      s,y
                   );
@@ -1245,7 +1250,7 @@ impl System{
                   self.registers.lr = interworking_addr;
 
                   let offset = unpack_operands!(
-                     get_operands_32b(&instr_32b, word),
+                     operands,
                      Operands::BR_LNK,
                      i
                   );
@@ -1271,6 +1276,9 @@ impl System{
       let reset_handler_ptr: u32 = from_arm_bytes(load_memory(&self,self.scs.vtor + 4).unwrap()) & (!1);
       self.registers.sp_main = main_sp_reset_val;
       self.registers.pc = reset_handler_ptr as usize;
+      if self.trace_enabled{
+         self.trace.push_str("====SYSTEM RESET OCCURED====\n");
+      }
    }
 
    fn do_move(&mut self, dest: usize, value: u32){

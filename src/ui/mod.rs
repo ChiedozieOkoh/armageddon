@@ -24,6 +24,7 @@ pub struct App{
    view_error: Option<String>,
    pending_mem_start: String,
    pending_mem_end: String,
+   trace_record: String,
    update_view: bool,
    bkpt_input: BkptInput
 }
@@ -420,8 +421,7 @@ fn pane_render<'a>(
       }
 
       PaneType::Trace=>{
-         let sys = app.sync_sys.try_lock().unwrap();
-         let content = scrollable(text(sys.trace.clone()).size(TEXT_SIZE).width(iced::Length::Fill));
+         let content = scrollable(text(&app.trace_record).size(TEXT_SIZE).width(iced::Length::Fill));
          container(
             column![
                content
@@ -488,6 +488,7 @@ impl Application for App{
          pending_mem_end: "end (hex)".into(),
          update_view: false,
          view_error: None,
+         trace_record: String::new(),
          bkpt_input: BkptInput { pending_addr_or_symbol: String::new() }
       },Command::none())
    }
@@ -758,6 +759,7 @@ impl Application for App{
          Event::Dbg(Debug::Step) => {
             let mut sys = self.sync_sys.try_lock().unwrap();
             Simulator::step_or_signal_halt(&mut sys).unwrap();
+            self.trace_record = sys.trace.clone();
             self.sys_view = sys.deref().into();
          },
 
@@ -791,6 +793,7 @@ impl Application for App{
          Event::Dbg(Debug::Halt(_type))=>{
             println!("dbg session halted due to {:?}",_type);
             let sys = self.sync_sys.try_lock().unwrap();
+            self.trace_record = sys.trace.clone();
             self.sys_view = sys.deref().into();
          }
          _ => todo!()

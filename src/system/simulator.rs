@@ -34,9 +34,15 @@ impl Simulator{
 
    pub fn step_or_signal_halt_type(sys: &mut System)->Result<(),HaltType>{
       match sys.step(){
-         Ok(offset) => match sys.offset_pc(offset){
-            Ok(_) => Ok(()),
-            Err(ex) => Err(HaltType::error(ex)),
+         Ok(offset) => {
+            if sys.check_for_exceptions().is_none(){
+               match sys.offset_pc(offset){
+                  Ok(_) => Ok(()),
+                  Err(ex) => Err(HaltType::error(ex)),
+               }
+            }else{
+               return Ok(())
+            }
          },
          Err(e) => {
             sys.set_exc_pending(e);
