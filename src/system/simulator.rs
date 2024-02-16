@@ -17,7 +17,13 @@ pub struct Simulator;
 impl Simulator{
    pub fn step_or_signal_halt(sys: &mut System)->Result<(),Debug>{
       match sys.step(){
-         Ok(offset) => Self::halt_if_err(sys.offset_pc(offset)),
+         Ok(offset) => {
+            if sys.check_for_exceptions().is_none(){
+               Self::halt_if_err(sys.offset_pc(offset))
+            }else{
+               return Ok(());
+            }
+         },
          Err(e) => {
             sys.set_exc_pending(e);
             sys.check_for_exceptions();

@@ -91,6 +91,21 @@ impl<'a> SymbolTable<'a>{
    }
 }
 
+pub fn print_instruction(addr: u32,code: &Opcode, operands: &Option<Operands>)->String{
+   let instruction = match operands{
+      Some(args) => {
+         if *code == Opcode::_16Bit(B16::CPS){
+            format!("{}{:#010x}:{}{}",INDENT,addr,INDENT,pretty_print(&args))
+         }else{
+            format!("{}{:#010x}:{}{} {}",INDENT,addr,INDENT,code,pretty_print(&args))
+         }
+      },
+      None => format!("{}{}",INDENT,code)
+   };
+
+   instruction
+}
+
 fn symbol_aware_disassemble(
    byte_offset :usize,
    code: Opcode,

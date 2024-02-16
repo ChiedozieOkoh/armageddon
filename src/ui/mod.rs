@@ -3,7 +3,7 @@ use std::{fmt::Display, sync::{Mutex, Arc}, ops::Deref, path::{Path, PathBuf}};
 use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list, image, tooltip, mouse_area}, Application, Theme, executor, Command, Element, futures::StreamExt};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b, elf::decoder::SymbolDefinition};
+use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b, elf::decoder::SymbolDefinition};
 
 use crate::dbg_ln;
 use crate::binutils::from_arm_bytes;
@@ -29,6 +29,7 @@ pub struct App{
 }
 
 struct SystemView{
+   pub mode: system::Mode,
    pub registers: Registers,
    pub sp: u32,
    pub xpsr: u32,
@@ -38,6 +39,7 @@ struct SystemView{
 impl From<&System> for SystemView{
    fn from(sys: &System) -> Self {
       Self{
+         mode: sys.mode.clone(),
          registers: sys.registers.clone(),
          sp: sys.get_sp(),
          xpsr: from_arm_bytes(sys.xpsr),
@@ -49,6 +51,7 @@ impl From<&System> for SystemView{
 impl Display for SystemView{
    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
       write!(f,concat!(
+             "mode: {:?}\n",
              "r0: {}\n",
              "r1: {}\n",
              "r2: {}\n",
@@ -67,6 +70,7 @@ impl Display for SystemView{
              "PC: {:#010x}\n",
              "XPSR: {:#010x}",
             ),
+            self.mode,
             self.registers.generic[0],
             self.registers.generic[1],
             self.registers.generic[2],
@@ -86,10 +90,6 @@ impl Display for SystemView{
             self.xpsr
       )
    }
-}
-
-struct Focus{
-   pub window_id: iced::widget::scrollable::Id,
 }
 
 struct BkptInput{
@@ -247,6 +247,12 @@ fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
          split_pane_event!(pane,PaneType::MemoryExplorer,Vertical),
          split_pane_event!(pane,PaneType::MemoryExplorer,Horizontal),
          "view a region of memory (right click to split horizontally)"
+      ),
+      img_button(
+         "logs",
+         split_pane_event!(pane,PaneType::Trace,Vertical),
+         split_pane_event!(pane,PaneType::Trace,Horizontal),
+         "view a log of recently executed instructions (right click to split horizontally)"
       ),
       //button(text("R>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::SystemState,pane_grid::Axis::Vertical))),
       //button(text("M>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Vertical))),
@@ -412,6 +418,16 @@ fn pane_render<'a>(
             ]
          ).width(iced::Length::Fill).height(iced::Length::Fill).into()
       }
+
+      PaneType::Trace=>{
+         let sys = app.sync_sys.try_lock().unwrap();
+         let content = scrollable(text(sys.trace.clone()).size(TEXT_SIZE).width(iced::Length::Fill));
+         container(
+            column![
+               content
+            ]
+         ).width(iced::Length::Fill).height(iced::Length::Fill).into()
+      }
    }
 }
 
@@ -445,8 +461,9 @@ impl Application for App{
    fn new(args: Self::Flags)->(Self,Command<Event>){
       let (state,_) = pane_grid::State::new(PaneType::Disassembler);
       
-      let (sys,entry_point, symbols) = args;
+      let (mut sys,entry_point, symbols) = args;
       let disasm = disasm_text(&sys.memory, entry_point, &symbols);
+      sys.trace_enabled = true;
       let starting_view: SystemView = (&sys).into();
       let sync_sys_arc = Arc::new(Mutex::new(sys));
       let disasm_id = iced::widget::scrollable::Id::unique();
@@ -844,7 +861,8 @@ pub enum Event{
 pub enum PaneType{
    Disassembler,
    SystemState,
-   MemoryExplorer
+   MemoryExplorer,
+   Trace
 }
 
 fn parse_hex(hex: &str)->Option<u32>{

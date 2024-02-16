@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use crate::asm::interpreter::print_instruction;
 use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
 use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
@@ -25,12 +26,13 @@ pub struct System{
    pub scs: SystemControlSpace,
    pub mode: Mode,
    primask: bool,
-   pending_primask: Option<bool>,
    pub memory: Vec<u8>,
-   pub breakpoints: Vec<usize>
+   pub breakpoints: Vec<usize>,
+   pub trace_enabled: bool,
+   pub trace: String
 }
 
-#[derive(Debug)]
+#[derive(Clone,Debug)]
 pub enum Mode{
    Thread,
    Handler
@@ -82,11 +84,12 @@ impl System{
          event_register: false,
          active_exceptions: [ExceptionStatus::Inactive; 48],
          primask: false,
-         pending_primask: None,
          scs: SystemControlSpace::reset(),
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
          memory: vec![0;capacity],
          breakpoints: Vec::new(),
+         trace_enabled: false,
+         trace: String::new()
       }
    }
 
@@ -100,10 +103,11 @@ impl System{
          active_exceptions: [ExceptionStatus::Inactive; 48],
          scs: SystemControlSpace::reset(),
          primask: false,
-         pending_primask: None,
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
          memory: text,
          breakpoints: Vec::new(),
+         trace_enabled: false,
+         trace: String::new()
       }
    }
 
@@ -230,9 +234,17 @@ impl System{
          match self.exception_return(addr){
             Ok(exc_n) => {
                dbg_ln!("returned from exception {}",exc_n);
+               if self.trace_enabled{
+                  self.trace.push_str(&format!("returned from exception {}",exc_n));
+                  self.trace.push('\n');
+               }
                return Ok(0);
             }
             Err(e)=>{
+               if self.trace_enabled{
+                  self.trace.push_str(&format!("ERR: {:?} occured during exception return",e));
+                  self.trace.push('\n');
+               };
                println!("ERR: {:?} occured during exception return",e);
                self.lockup();
                return Err(e);
@@ -288,7 +300,7 @@ impl System{
       self.active_exceptions[exc.number() as usize] = ExceptionStatus::Pending;
    }
 
-   pub fn check_for_exceptions(&mut self){
+   pub fn check_for_exceptions(&mut self)->Option<u32>{
       for i in 0 .. self.active_exceptions.len(){
          match &self.active_exceptions[i]{
             ExceptionStatus::Pending => {
@@ -303,9 +315,7 @@ impl System{
                      if exc.priority_group(&self.scs) < self.execution_priority(self.primask,&self.scs){
                         match self.init_exception(exc){
                            Ok(n) => {
-                              if n.is_some(){
-                                 return;
-                              }
+                              return n;
                            },
                            Err(exc) => {
                               panic!("error during exception entry {:?}",exc);
@@ -313,7 +323,7 @@ impl System{
                               if current_priority == -1 || current_priority == -2{
                                  self.lockup();
                               }
-                              return;
+                              return None;
                            },
                         }
                      }
@@ -324,6 +334,7 @@ impl System{
             _ => {}
          }
       }
+      return None;
    }
 
    fn init_exception(&mut self, exc_type: ArmException)->Result<Option<u32>,ArmException>{
@@ -333,7 +344,11 @@ impl System{
          self.scs.set_vec_pending(exc_type.number());
          return Ok(None);
       }else{
-         println!("initialising {:? } exception",exc_type);
+         println!("initialising {:?} exception",exc_type);
+         if self.trace_enabled{
+            self.trace.push_str(&format!("initialising {:?} exception",exc_type));
+            self.trace.push('\n');
+         }
          self.save_context_frame(&exc_type)?;
          let offset = self.jump_to_exception(&exc_type)?;
          println!("exception offset: {:#x}",offset);
@@ -345,6 +360,7 @@ impl System{
 
    fn save_context_frame(&mut self,exc_type: &ArmException)->Result<(),ArmException>{
       let sp = self.get_sp();
+      println!("SP on exception entry: {}",sp);
       let mut xpsr = from_arm_bytes(self.xpsr);
       xpsr = if self.get_sp_frame_alignment(){
          xpsr | (1 << 9)
@@ -536,18 +552,23 @@ impl System{
       match instr_size{
          InstructionSize::B16 => {
             let code = Opcode::from(maybe_code);
+            let operands = get_operands(&code, maybe_code);
             dbg_ln!(
                "@:{:#x} raw {:#x},{:#x} => {} :: {:?}",
                self.registers.pc as u32,
                maybe_code[0],
                maybe_code[1],
                code,
-               get_operands(&code, maybe_code)
+               operands
             );
+            if self.trace_enabled{
+               self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+               self.trace.push('\n');
+            }
             match code {
                Opcode::_16Bit(B16::ADD_Imm3)=>{
                   let (dest, src, imm3) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::RegPairImm3,
                      a,b,c
                   );
@@ -565,7 +586,7 @@ impl System{
 
                Opcode::_16Bit(B16::ADD_Imm8)=>{
                   let (dest, imm8) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::DestImm8,
                      a,b
                   );
@@ -583,7 +604,7 @@ impl System{
 
                Opcode::_16Bit(B16::ADDS_REG) =>{
                   let (dest, src, arg) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::RegisterTriplet,
                      a,b,c
                   );
@@ -601,7 +622,7 @@ impl System{
 
                Opcode::_16Bit(B16::ADD_REG_SP_IMM8) =>{
                   let (dest,imm) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::ADD_REG_SP_IMM8,
                      a,b
                   );
@@ -617,7 +638,7 @@ impl System{
 
                Opcode::_16Bit(B16::INCR_SP_BY_IMM7) =>{
                   let imm = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::INCR_SP_BY_IMM7,
                      a
                   );
@@ -634,7 +655,7 @@ impl System{
 
                Opcode::_16Bit(B16::INCR_SP_BY_REG) => {
                   let src = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::INCR_SP_BY_REG,
                      r
                   );
@@ -651,7 +672,7 @@ impl System{
 
                conditional_branches!() => {
                   let offset = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::COND_BRANCH,
                      i
                   );
@@ -668,7 +689,7 @@ impl System{
 
                Opcode::_16Bit(B16::B_ALWAYS) =>{
                   let offset = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::B_ALWAYS,
                      i
                   );
@@ -677,7 +698,7 @@ impl System{
 
                Opcode::_16Bit(B16::BR_EXCHANGE) =>{
                   let register = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::BR_EXCHANGE,
                      r
                   );
@@ -688,7 +709,7 @@ impl System{
 
                Opcode::_16Bit(B16::BR_LNK_EXCHANGE) =>{
                   let register = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::BR_LNK_EXCHANGE,
                      r
                   );
@@ -703,7 +724,7 @@ impl System{
 
                Opcode::_16Bit(B16::CMP_Imm8) => {
                   let (src, imm8) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::CMP_Imm8,
                      a,b
                   );
@@ -717,7 +738,7 @@ impl System{
 
                Opcode::_16Bit(B16::CMP_REG_T1) => {
                   let (first, secnd) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::PureRegisterPair,
                      a,b
                   );
@@ -732,7 +753,7 @@ impl System{
 
                Opcode::_16Bit(B16::CMP_REG_T2)=> {
                   let (first, secnd) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::PureRegisterPair,
                      a,b
                   );
@@ -747,7 +768,7 @@ impl System{
 
                Opcode::_16Bit(B16::CPS) => {
                   let interrupt_flag = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::EnableInterupt,
                      a
                   );
@@ -757,7 +778,7 @@ impl System{
 
                Opcode::_16Bit(B16::XOR_REG)=>{
                   let (dest,arg) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::RegisterPair,
                      a,b
                   );
@@ -777,7 +798,7 @@ impl System{
                
                Opcode::_16Bit(B16::SUB_Imm3) => {
                   let (dest,src,imm3) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::RegPairImm3,
                      a,b,c
                   );
@@ -795,7 +816,7 @@ impl System{
 
                Opcode::_16Bit(B16::SUB_Imm8) => {
                   let (dest,imm8) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::DestImm8,
                      a,b
                   );
@@ -812,7 +833,7 @@ impl System{
 
                Opcode::_16Bit(B16::SUB_REG) => {
                   let (dest,src,arg) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::RegisterTriplet,
                      a,b,c
                   );
@@ -829,7 +850,7 @@ impl System{
 
                Opcode::_16Bit(B16::MUL) => {
                   let (dest,arg) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::RegisterPair,
                      a,b
                   );
@@ -859,7 +880,7 @@ impl System{
 
                Opcode::_16Bit(B16::MOV_Imm8)=> {
                   let (dest, imm8) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::DestImm8,
                      a,i
                   );
@@ -870,7 +891,7 @@ impl System{
 
                Opcode::_16Bit(B16::MOV_REGS_T1)=> {
                   let (dest, src) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::MOV_REG,
                      a,b
                   );
@@ -881,7 +902,7 @@ impl System{
 
                Opcode::_16Bit(B16::MOV_REGS_T2)=>{
                   let (dest, src) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::MOV_REG,
                      a,b
                   );
@@ -893,7 +914,7 @@ impl System{
 
                Opcode::_16Bit(B16::MVN)=>{
                   let (dest,src) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::MOV_REG,
                      a,b
                   );
@@ -905,7 +926,7 @@ impl System{
 
                Opcode::_16Bit(B16::ORR)=>{
                   let (dest,arg) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::RegisterPair,
                      a,b
                   );
@@ -927,7 +948,7 @@ impl System{
 
                Opcode::_16Bit(B16::LDR_REGS)=>{
                   let (dest,base,offset) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::LDR_REG,
                      a,b,c
                   );
@@ -940,7 +961,7 @@ impl System{
 
                Opcode::_16Bit(B16::LDR_Imm5)=>{
                   let (dest,base,offset) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::LDR_Imm5,
                      a,b,c
                   );
@@ -953,7 +974,7 @@ impl System{
 
                Opcode::_16Bit(B16::LDR_PC_Imm8) => {
                   let (dest,src,offset) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::LDR_Imm8,
                      a,b,i
                   );
@@ -967,7 +988,7 @@ impl System{
 
                Opcode::_16Bit(B16::LDM) =>{
                   let (base, list) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::LoadableList,
                      b,l
                   );
@@ -988,7 +1009,7 @@ impl System{
 
                Opcode::_16Bit(B16::LSL_Imm5) =>{
                   let (dest,src,ammount) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::LS_Imm5,
                      a,b,c
                   );
@@ -1004,7 +1025,7 @@ impl System{
 
                Opcode::_16Bit(B16::LSL_REGS) =>{
                   let (dest,arg) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::RegisterPair,
                      a,b
                   );
@@ -1023,7 +1044,7 @@ impl System{
 
                Opcode::_16Bit(B16::LSR_Imm5) =>{
                   let (dest,src,ammount) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::LS_Imm5,
                      a,b,c
                   );
@@ -1039,7 +1060,7 @@ impl System{
 
                Opcode::_16Bit(B16::LSR_REGS) =>{
                   let (dest,arg) = unpack_operands!(
-                     get_operands(&code,maybe_code),
+                     operands,
                      Operands::RegisterPair,
                      a,b
                   );
@@ -1058,7 +1079,7 @@ impl System{
 
                Opcode::_16Bit(B16::STR_Imm5) => {
                   let (v_reg,base,offset) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::STR_Imm5,
                      a,b,i
                   );
@@ -1074,7 +1095,7 @@ impl System{
 
                Opcode::_16Bit(B16::STM) =>{
                   let (base_register,list) = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::LoadableList,
                      r,l
                   );
@@ -1111,7 +1132,7 @@ impl System{
 
                Opcode::_16Bit(B16::PUSH) => {
                   let list = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::RegisterList,
                      a
                   ); 
@@ -1138,7 +1159,7 @@ impl System{
                Opcode::_16Bit(B16::POP) =>{
                   let mut offset = instr_size.in_bytes() as i32;
                   let list = unpack_operands!(
-                     get_operands(&code, maybe_code),
+                     operands,
                      Operands::RegisterList,
                      a
                   ); 
@@ -1377,6 +1398,7 @@ fn write_to_memory_mapped_register(sys: &mut System, address: u32, v: u32)->Resu
    }
    fault_if_not_aligned(address, 4)?;
    let ppb_register = MemoryMappedRegister::from_address(address).unwrap();
+   println!("detected write to PPB ({:?})",ppb_register);
    ppb_register.update(sys, v);
    return Ok(());
 }
@@ -1556,6 +1578,7 @@ impl ArmException{
    }
 }
 
+#[derive(Debug)]
 enum MemoryMappedRegister{
    icsr,
    vtor,
@@ -1612,9 +1635,9 @@ impl MemoryMappedRegister{
    pub fn update(&self, sys: &mut System, v: u32){
       match self{
          MemoryMappedRegister::icsr => { 
-            if 0x80000000 & v > 0{
+            if 0x80000000_u32 & v > 0{
                let n = ArmException::Nmi.number();
-               dbg_ln!("write to ICSR.NMI_PEND_SET will trigger NMI");
+               println!("write to ICSR.NMI_PEND_SET will trigger NMI");
                sys.active_exceptions[n as usize] = ExceptionStatus::Pending;
             }
 
