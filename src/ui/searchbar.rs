@@ -5,6 +5,7 @@ use super::Cast;
 pub struct SearchBar{
    pub kind: Kind,
    pub target: String,
+   pub pending: String,
    occurances: Occurance,
    cursor: usize,
    focus: Option<usize>
@@ -42,6 +43,7 @@ impl SearchBar{
       Self { 
          kind: Kind::Code,
          target: String::new(),
+         pending: String::new(),
          occurances: Occurance::Text(Vec::new()), 
          cursor: 0,
          focus: None 

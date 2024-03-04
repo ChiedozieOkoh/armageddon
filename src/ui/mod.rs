@@ -279,7 +279,15 @@ fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextP
    if before.is_some(){
       text_box = text_box.push(text(before.unwrap()).size(TEXT_SIZE));
    }
-   text_box = text_box.push(text(hl_region).size(TEXT_SIZE).style(iced::color!(100,0,0)));
+   text_box = text_box.push(
+      text(hl_region)
+         .size(TEXT_SIZE)
+         .style(iced::color!(100,0,0))
+         .font(iced::Font{
+            weight: iced::font::Weight::Bold,
+            .. Default::default()
+         })
+   );
    if after.is_some(){
       text_box = text_box.push(text(after.unwrap()).size(TEXT_SIZE));
    }
@@ -705,7 +713,7 @@ impl Application for App{
          Event::Ui(Gui::OpenSearchBar)=>{ self.searchbar = Some(SearchBar::create()); },
 
          Event::Ui(Gui::SetSearchInput(input))=> {
-            self.searchbar.as_mut().unwrap().target = input;
+            self.searchbar.as_mut().unwrap().pending = input;
          },
 
          Event::Ui(Gui::CloseSearchBar)=>{ self.searchbar = None; },
@@ -714,8 +722,10 @@ impl Application for App{
             let _ = self.searchbar.as_mut().unwrap().focus_next();
          }
          Event::Ui(Gui::SubmitSearch)=>{
+            let sb = self.searchbar.as_mut().unwrap();
+            sb.target = sb.pending.clone();
             let sys = self.sync_sys.try_lock().unwrap();
-            match self.searchbar.as_mut().unwrap().find(&self.disasm, &sys.memory[..]){
+            match sb.find(&self.disasm, &sys.memory[..]){
                 Ok(_) => {},
                 Err(e) => println!("error occured during search {:?}",e),
             }
@@ -922,7 +932,7 @@ impl Application for App{
 fn searchbar<'a>(bar: &'a SearchBar)->iced::Element<'a,Event>{
    let close = button("close").on_press(Event::Ui(Gui::CloseSearchBar));
    let next = button("next").on_press(Event::Ui(Gui::FocusNextSearchResult));
-   let input = text_input(&bar.help(), &bar.target)
+   let input = text_input(&bar.help(), &bar.pending)
       .on_input(|s|Event::Ui(Gui::SetSearchInput(s)))
       .on_submit(Event::Ui(Gui::SubmitSearch));
    row![next,input,close].into()
