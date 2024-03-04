@@ -1,13 +1,15 @@
 use std::{fmt::Display, sync::{Mutex, Arc}, ops::Deref, path::{Path, PathBuf}};
 
-use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list, image, tooltip, mouse_area}, Application, Theme, executor, Command, Element, futures::StreamExt};
+use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list, image, tooltip, mouse_area, Row}, Application, Theme, executor, Command, Element, futures::StreamExt};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol}, binutils::from_arm_bytes_16b, elf::decoder::SymbolDefinition};
+use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol, TextPosition}, binutils::from_arm_bytes_16b, elf::decoder::SymbolDefinition};
 
 use crate::dbg_ln;
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
+
+pub mod searchbar;
 
 pub struct App{
    _state: pane_grid::State<PaneType>,
@@ -15,6 +17,7 @@ pub struct App{
    diasm_win_id: iced::widget::scrollable::Id,
    entry_point: usize,
    pub disasm: String,
+   searchbar: Option<SearchBar>,
    symbols: Vec<SymbolDefinition>,
    mem_view: Option<MemoryView>,
    sys_view: SystemView,
@@ -232,19 +235,19 @@ fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
    use pane_grid::Axis::Horizontal as Horizontal;
    row![
       img_button(
-         "D",
+         "disassembly",
          split_pane_event!(pane,PaneType::Disassembler,Vertical),
          split_pane_event!(pane,PaneType::Disassembler,Horizontal),
          "Open disassembly (right click to split horizontally)"
       ),
       img_button(
-         "R",
+         "registers",
          split_pane_event!(pane,PaneType::SystemState,Vertical),
          split_pane_event!(pane,PaneType::SystemState,Horizontal),
          "View cpu registers (right click to split horizontally)"
       ),
       img_button(
-         "M",
+         "memory",
          split_pane_event!(pane,PaneType::MemoryExplorer,Vertical),
          split_pane_event!(pane,PaneType::MemoryExplorer,Horizontal),
          "view a region of memory (right click to split horizontally)"
@@ -259,11 +262,29 @@ fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
       //button(text("M>")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Vertical))),
       //button(text("M^")).on_press(Event::Ui(Gui::SplitPane(pane,PaneType::MemoryExplorer,pane_grid::Axis::Horizontal))),
       if n_panes > 1{
-         button(text("Close")).on_press(Event::Ui(Gui::ClosePane(pane)))
+         button(text("close")).on_press(Event::Ui(Gui::ClosePane(pane)))
       }else{
-         button(text("Close"))
+         button(text("close"))
       }
    ].spacing(5).into()
+}
+
+fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextPosition, _focus: bool)->Row<'a,Event,iced::Renderer>{
+   let offset = current_result.line_offset;
+   let hl_len = target.len();
+   let hl_region = line.get(offset .. offset + hl_len).unwrap();
+   let before = line.get(.. offset);
+   let after =  line.get(offset + hl_len ..);
+   let mut text_box = Row::new();
+   if before.is_some(){
+      text_box = text_box.push(text(before.unwrap()).size(TEXT_SIZE));
+   }
+   text_box = text_box.push(text(hl_region).size(TEXT_SIZE).style(iced::color!(100,0,0)));
+   if after.is_some(){
+      text_box = text_box.push(text(after.unwrap()).size(TEXT_SIZE));
+   }
+
+   text_box.padding(0).height(iced::Length::Shrink)
 }
 
 fn pane_render<'a>(
@@ -273,14 +294,40 @@ fn pane_render<'a>(
    match state{
       PaneType::Disassembler => {
          let ir = app.sys_view.raw_ir;
-         let highlighted = app.disasm.lines().take(1).next().unwrap();
-         let text_widget: iced::widget::Text<'a,iced::Renderer> = if highlighted.contains("<"){
-            text(highlighted).size(TEXT_SIZE).style(iced::color!(100,0,0))
+         let mut line_number: usize = 0; 
+         let mut sr_idx: usize = 0;
+         let search_results = if app.searchbar.is_some(){
+            app.searchbar.as_ref().unwrap().text_occurances()
          }else{
-            text(highlighted).size(TEXT_SIZE)
+            vec![]
          };
+
+         let current_search_result = |r: &Vec<TextPosition>, counter: usize|{
+            if r.is_empty(){
+               return None
+            }
+            if counter >= r.len(){
+               return None;
+            }
+            return Some(r[counter].line_number);
+         };
+
+         let highlighted = app.disasm.lines().take(1).next().unwrap();
+         let c_search_result = current_search_result(&search_results,sr_idx);
+         let text_widget: Row<Event>= if highlighted.contains("<"){
+            row![text(highlighted).size(TEXT_SIZE).style(iced::color!(100,0,0))]
+         }else if c_search_result.is_some_and(|sr| sr == line_number){
+            println!("current search result ptr {:?}",c_search_result);
+            let current = sr_idx;
+            sr_idx += 1;
+            highlight_search_result(&app.searchbar.as_ref().unwrap().target, highlighted, &search_results[current], false)
+         }else{
+            row![text(highlighted).size(TEXT_SIZE)]
+         };
+
+         line_number += 1;
          let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![text_widget];
-         text_box = text_box.spacing(0).padding(0);
+         text_box = text_box.spacing(0).padding(0).height(iced::Length::Shrink);
          let mut un_highlighted = String::new();
 
          for line in app.disasm.lines().skip(1){
@@ -338,8 +385,32 @@ fn pane_render<'a>(
                            un_highlighted.clear();
                            text_box = text_box.push(container(text(line).size(TEXT_SIZE)).style(brkpt_theme).padding(0));
                         }else{
-                           un_highlighted.push_str(line);
-                           un_highlighted.push('\n');
+                           let current = current_search_result(&search_results,sr_idx);
+                           if current.is_some_and(|sr| sr == line_number){
+                              if !un_highlighted.is_empty() {
+                                 un_highlighted.pop();
+                                 text_box = text_box.push(
+                                    text(&un_highlighted)
+                                    .size(TEXT_SIZE)
+                                    .width(iced::Length::Fill)
+                                    .height(iced::Length::Shrink)
+                                    ).padding(0);
+                                 un_highlighted.clear();
+                              }
+
+                              text_box = text_box.push(
+                                 highlight_search_result(
+                                    &app.searchbar.as_ref().unwrap().target,
+                                    line,
+                                    &search_results[sr_idx],
+                                    false
+                                 )
+                              );
+                              sr_idx += 1;
+                           }else{
+                              un_highlighted.push_str(line);
+                              un_highlighted.push('\n');
+                           }
                         }
                      },
                      None => {
@@ -350,16 +421,14 @@ fn pane_render<'a>(
                }else{
                   un_highlighted.push('\n');
                }
-
-               //un_highlighted.push_str(line);
-               //un_highlighted.push('\n');
             };
+            line_number += 1;
          }
          if !un_highlighted.trim().is_empty(){
             text_box = text_box.push(text(&un_highlighted).size(TEXT_SIZE).width(iced::Length::Fill));
          }
          //let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill).style(iced::color!(100,0,0));
-         container(scrollable(text_box).id(app.diasm_win_id.clone()))
+         container(scrollable(text_box.spacing(0)).id(app.diasm_win_id.clone()))
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
@@ -483,6 +552,7 @@ impl Application for App{
          sys_view: starting_view,
          cmd_sender: None,
          mem_view: None,
+         searchbar: None,
          breakpoints: Vec::new(),
          pending_mem_start: "start (hex)".into(),
          pending_mem_end: "end (hex)".into(),
@@ -503,12 +573,19 @@ impl Application for App{
          match event{
             iced::Event::Keyboard(KeyEvent::KeyReleased { key_code, modifiers }) => match key_code{
                 iced::keyboard::KeyCode::Enter => {
-                   if modifiers.alt(){
+                   if modifiers.alt() && matches!(status,iced::event::Status::Ignored){
                       Some(Event::Ui(Gui::CentreDisassembler))
                    }else{
                       None
                    }
                 },
+                iced::keyboard::KeyCode::F =>{
+                   if modifiers.control(){
+                      Some(Event::Ui(Gui::OpenSearchBar))
+                   }else{
+                      None
+                   }
+                }
                 _ => None,
             },
             _ => None
@@ -624,6 +701,25 @@ impl Application for App{
             self._state.close(&pane);
             self.n_panes -= 1;
          },
+
+         Event::Ui(Gui::OpenSearchBar)=>{ self.searchbar = Some(SearchBar::create()); },
+
+         Event::Ui(Gui::SetSearchInput(input))=> {
+            self.searchbar.as_mut().unwrap().target = input;
+         },
+
+         Event::Ui(Gui::CloseSearchBar)=>{ self.searchbar = None; },
+
+         Event::Ui(Gui::FocusNextSearchResult)=>{
+            let _ = self.searchbar.as_mut().unwrap().focus_next();
+         }
+         Event::Ui(Gui::SubmitSearch)=>{
+            let sys = self.sync_sys.try_lock().unwrap();
+            match self.searchbar.as_mut().unwrap().find(&self.disasm, &sys.memory[..]){
+                Ok(_) => {},
+                Err(e) => println!("error occured during search {:?}",e),
+            }
+         }
 
          Event::Ui(Gui::CentreDisassembler)=>{
             let ir = self.sys_view.raw_ir;
@@ -802,7 +898,7 @@ impl Application for App{
       cmd
     }
 
-   fn view(&self) -> iced::Element<'_, Self::Message, iced::Renderer<Self::Theme>> {
+   fn view(&self) -> iced::Element<'_, Self::Message, iced::Renderer> {
       let layout = PaneGrid::new(&self._state, |id, pane, _maximised|{
          let title_bar = pane_grid::TitleBar::new("Armageddon").controls(pane_cmds(self.n_panes,id)).padding(10).style(focused_pane);
          pane_grid::Content::new(
@@ -810,9 +906,26 @@ impl Application for App{
          ).title_bar(title_bar)
       }.style(focused_pane))
       .on_resize(10,|e| Event::Ui(Gui::ResizePane(e)));
-      column![user_cmds(&self.bkpt_input),layout].into()
+      if self.searchbar.is_some(){
+         column![
+            user_cmds(&self.bkpt_input),
+            searchbar(&self.searchbar.as_ref().unwrap()),
+            layout
+         ].into()
+      }else{
+         column![user_cmds(&self.bkpt_input),layout].into()
+      }
       //layout.into()
     }
+}
+
+fn searchbar<'a>(bar: &'a SearchBar)->iced::Element<'a,Event>{
+   let close = button("close").on_press(Event::Ui(Gui::CloseSearchBar));
+   let next = button("next").on_press(Event::Ui(Gui::FocusNextSearchResult));
+   let input = text_input(&bar.help(), &bar.target)
+      .on_input(|s|Event::Ui(Gui::SetSearchInput(s)))
+      .on_submit(Event::Ui(Gui::SubmitSearch));
+   row![next,input,close].into()
 }
 
 /*pub enum Breakpoint{
@@ -821,7 +934,9 @@ impl Application for App{
 }*/
 
 use iced::futures::channel::mpsc as iced_mpsc;
-use iced::futures::sink::SinkExt; 
+use iced::futures::sink::SinkExt;
+
+use self::searchbar::SearchBar; 
 #[derive(Debug,Clone)]
 pub enum Debug{
    Halt(HaltType),
@@ -843,6 +958,11 @@ pub enum Gui{
    SetBkptInput(String),
    SubmitBkpt,
    SubmitHalt,
+   OpenSearchBar,
+   SubmitSearch,
+   FocusNextSearchResult,
+   CloseSearchBar,
+   SetSearchInput(String),
    CentreDisassembler
 }
 

@@ -2,11 +2,11 @@ use std::fmt::Display;
 
 use crate::asm::interpreter::print_instruction;
 use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
-use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits};
+use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
 use crate::dbg_ln;
-use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply, xor} ;
+use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply, xor, carry_flag, overflow_flag, ror, asr} ;
 
 use self::instructions::{cond_passed, shift_left, shift_right};
 use self::registers::{Registers, Apsr, SpecialRegister, get_overflow_bit};
@@ -636,6 +636,54 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::ASRS_Imm5) =>{
+                  let (dest,src,imm5) = unpack_operands!(
+                     operands,
+                     Operands::ASRS_Imm5,
+                     a,b,i
+                  );
+
+                  let v = self.registers.generic[src.0 as usize];
+                  let shift = if imm5.0 == 0{ 32 } else{imm5.0 };
+                  let (result, flags) = asr(
+                     v, 
+                     shift,
+                     carry_flag(self.xpsr),
+                     overflow_flag(self.xpsr)
+                  );
+
+                  self.registers.generic[dest.0 as usize] = result;
+                  self.update_apsr(&flags);
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::ASRS_REG)=>{
+                  let (dest,shift) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let v = self.registers.generic[dest.0 as usize];
+                  let ammount = self.registers.generic[shift.0 as usize] & 0xFF;
+                  let shift = if ammount % 32 == 0 {
+                     32
+                  }else{
+                     ammount % 32
+                  };
+
+                  let (result,flags) = asr(
+                     v,
+                     shift,
+                     carry_flag(self.xpsr),
+                     overflow_flag(self.xpsr)
+                  );
+
+                  self.registers.generic[dest.0 as usize] = result;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_16Bit(B16::INCR_SP_BY_IMM7) =>{
                   let imm = unpack_operands!(
                      operands,
@@ -720,6 +768,27 @@ impl System{
                      println!("WARN: reading from PC register for BLX is unpredictable undefined behaviour");
                   }
                   return self.bx_interworking_pc_offset(branch_target);
+               },
+
+               Opcode::_16Bit(B16::BIT_CLEAR_REGISTER)=>{
+                  let (dest,arg) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+                  let src = self.registers.generic[arg.0 as usize];
+                  self.registers.generic[dest.0 as usize] &= !src;
+
+                  let flags = ConditionFlags{
+                     negative: self.registers.generic[dest.0 as usize] & 0x80000000 > 0,
+                     zero: self.registers.generic[dest.0 as usize] == 0,
+                     carry: carry_flag(self.xpsr),
+                     overflow: overflow_flag(self.xpsr)
+                  };
+
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
                },
 
                Opcode::_16Bit(B16::CMP_Imm8) => {
@@ -933,16 +1002,16 @@ impl System{
 
                   let v = self.registers.generic[dest.0 as usize] | self.registers.generic[arg.0 as usize];
                   self.registers.generic[dest.0 as usize] = v;
+                  let carry = carry_flag(self.xpsr);
                   let overflow = get_overflow_bit(self.xpsr);
                   let flags = ConditionFlags{
                      negative: (0x80000000 & v) > 0,
-                     carry: false,
+                     carry,
                      zero: v == 0,
                      overflow
                   };
 
                   self.update_apsr(&flags); 
-
                   return Ok(instr_size.in_bytes() as i32);
                }
 
@@ -1051,7 +1120,8 @@ impl System{
 
                   let overflow = get_overflow_bit(self.xpsr);
                   let arg = self.registers.generic[src.0 as usize];
-                  let (res, flags) = shift_right(arg, ammount.0, overflow);
+                  let ammount = if ammount.0 == 0{ 32 }else{ ammount.0 };
+                  let (res, flags) = shift_right(arg, ammount, overflow);
                   self.registers.generic[dest.0 as usize] = res;
                   self.update_apsr(&flags);
 
@@ -1068,8 +1138,9 @@ impl System{
                   let overflow = get_overflow_bit(self.xpsr);
                   let val = self.registers.generic[dest.0 as usize];
                   let shift = self.registers.generic[arg.0 as usize] & 0xFF;
+                  let ammount = if shift == 0{ 32 }else{ shift };
 
-                  let (res, flags) = shift_right(val, shift, overflow);
+                  let (res, flags) = shift_right(val, ammount, overflow);
 
                   self.registers.generic[dest.0 as usize] = res;
                   self.update_apsr(&flags);
@@ -1180,6 +1251,70 @@ impl System{
 
                   self.set_sp(old_sp)?;
                   return Ok(offset);
+               },
+
+               Opcode::_16Bit(B16::REV) =>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let v = self.registers.generic[src.0 as usize];
+                  let mut new: u32 = (v & 0xFF) << 24; 
+                  new |= (v & 0xFF00) << 8;
+                  new |= (v & 0xFF0000) >> 8;
+                  new |= (v & 0xFF000000) >> 24;
+
+                  self.registers.generic[dest.0 as usize] = new;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::REV_16)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let v = self.registers.generic[src.0 as usize];
+                  let mut new: u32 = (v & 0xFF0000) << 8;
+                  new |= (v & 0xFF000000) >> 8;
+                  new |= (v & 0xFF) << 8;
+                  new |= (v & 0xFF00) >> 8;
+
+                  self.registers.generic[dest.0 as usize]  = new;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::REVSH)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+                  let v = self.registers.generic[src.0 as usize];
+                  let mut new: u32 = sign_extend_u32::<8>(v & 0xFF);
+                  new &= 0xFFFFFF00;
+                  new |= (v & 0xFF00) >> 8;
+                  
+                  self.registers.generic[dest.0 as usize] = new;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::ROR)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+                  let rotate = self.registers.generic[src.0 as usize] & 0xFF;
+                  let arg = self.registers.generic[dest.0 as usize];
+                  let (rotated,flags) = ror(arg,rotate,overflow_flag(self.xpsr));
+
+                  self.registers.generic[dest.0 as usize] = rotated;
+                  self.update_apsr(&flags);
+                  return Ok(instr_size.in_bytes() as i32);
                },
 
                Opcode::_16Bit(B16::NOP) => {

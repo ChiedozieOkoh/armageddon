@@ -24,10 +24,19 @@ fn main() {
    //cli_disasm();
 }
 
+fn print_help(){
+   println!("Usage: armageddon <FILE> <OPTIONS>");
+   println!("starts the simulator with the ELF file program loaded");
+   println!("Option list");
+   let padding = 10;
+   println!("-h, --help{:>padding$}","show this message");
+}
+
 fn gui_diasm(){
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{
       dbg_ln!("you must provide one elf file");
+      print_help();
       std::process::exit(-1);
    }
 

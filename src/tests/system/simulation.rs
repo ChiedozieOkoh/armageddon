@@ -283,6 +283,46 @@ pub fn should_do_move()->Result<(),std::io::Error>{
 }
 
 #[test]
+pub fn should_do_rev()->Result<(),std::io::Error>{
+   run_assembly(
+      &Path::new("sim_ror.s"),
+      b".thumb
+         .text
+         .thumb
+         REV r0,r0
+         REV16 r0,r0
+         REVSH r0,r0
+         REVSH r0,r0
+      ",
+      |entry_point, code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+         sys.registers.generic[0] = 0x99AA88CC;
+         let n = sys.step()?;
+         assert_eq!(sys.registers.generic[0],0xCC88AA99);
+         sys.offset_pc(n)?;
+
+         sys.registers.generic[0] = 0xFA82DB14;
+         let n = sys.step()?;
+         assert_eq!(sys.registers.generic[0],0x82FA14DB);
+         sys.offset_pc(n)?;
+
+         sys.registers.generic[0] = 0x09A3;
+         let n = sys.step()?;
+         assert_eq!(sys.registers.generic[0],0xFFFFFF09);
+         sys.offset_pc(n)?;
+
+         sys.registers.generic[0] = 0xFA73;
+         let n = sys.step()?;
+         assert_eq!(sys.registers.generic[0],0xFA);
+         sys.offset_pc(n)?;
+
+         return Ok(());
+      }
+   )?;
+   return Ok(());
+}
+
+#[test]
 pub fn should_do_sub()->Result<(),std::io::Error>{
    run_assembly(
       &Path::new("sum_sub.s"),

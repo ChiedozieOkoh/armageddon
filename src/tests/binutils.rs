@@ -17,6 +17,7 @@ fn bitfields_bounds_are_correct(){
    assert_eq!(3,smax::<3>());
    assert_eq!(-4,smin::<3>());
    assert_eq!(7,umax::<3>());
+   assert_eq!(u32::MAX,umax::<32>());
 }
 
 #[test]

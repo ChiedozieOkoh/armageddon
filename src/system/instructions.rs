@@ -130,6 +130,24 @@ pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-
    return ((result & 0xFFFFFFFF) as u32,carry_out,overflow);
 }
 
+pub fn asr(val: u32, ammount: u32,carry: bool, overflow: bool)->(u32,ConditionFlags){
+   let signed = val & 0x80000000 > 0;
+   let signed_bits = u32::MAX << (32 - ammount);
+   let result = if signed{
+      (val >> ammount) | signed_bits
+   }else{
+      val >> ammount
+   };
+
+   let flags = ConditionFlags{
+      negative: signed,
+      zero: result == 0,
+      carry,
+      overflow,
+   };
+   return (result, flags);
+}
+
 pub fn shift_right(a: u32, shift: u32, overflow: bool)->(u32,ConditionFlags){
    assert!(shift > 0);
    let last_discarded_bit = ((1 << (shift - 1)) & a) > 0;
@@ -158,6 +176,18 @@ pub fn shift_left(a: u32, shift: u32, overflow: bool)->(u32,ConditionFlags){
    return (result,flags);
 }
 
+pub fn ror(a: u32, rotate: u32, overflow: bool)->(u32,ConditionFlags){
+   let r_amt = rotate % 32;
+   let left_shift = 32 - r_amt;
+   let result = (a << left_shift) | (a >> r_amt);
+   let flags = ConditionFlags{
+      carry: (result & 0x80000000) > 0,
+      negative: (result & 0x80000000) > 0 ,
+      zero: result == 0,
+      overflow
+   };
+   return (result,flags);
+}
 pub fn xor(a: u32, b: u32, overflow: bool)->(u32,ConditionFlags){
    let r = a^b;
    let flags = ConditionFlags{

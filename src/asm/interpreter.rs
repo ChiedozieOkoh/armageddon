@@ -133,6 +133,7 @@ fn symbol_aware_disassemble(
 
 }
 
+//TODO refactor so that lambdas don't needlessly allocate new strings
 pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<SymbolDefinition>)->Vec<String>{
    let src_code = disassemble(
       bytes,
@@ -312,6 +313,124 @@ P: FnMut(usize,&[u8],&mut SymbolTable)->T,
    result 
 }
 
+#[derive(Clone)]
+pub struct TextPosition{
+   pub line_number: usize,
+   pub line_offset: usize
+}
+
+pub fn find_string_position(string: &str, substring: &str)->Vec<TextPosition>{
+   let mut occurances = Vec::new();
+   for (i,line) in string.lines().enumerate(){
+      match line.find(substring){
+         Some(p) => {occurances.push(TextPosition { line_number: i, line_offset: p });},
+         None => {}
+      }
+   }
+   occurances
+}
+
+pub fn find_string(string: &str, substring: &str)->Vec<usize>{
+   let mut h = 0; 
+   let mut n = 0; 
+   let mut occurances = Vec::new();
+   let lps = build_lps_list(substring);
+   while h < string.len(){
+      if string.chars().nth(h) == substring.chars().nth(n){
+         h += 1;
+         n += 1;
+      }else{
+         if n == 0{
+            h += 1;
+         }else{
+            n = lps[n - 1];
+         }
+      }
+      if n == substring.len(){
+         occurances.push(h - substring.len());
+         n = 0;
+      }
+   }
+
+   return occurances;
+}
+
+pub fn build_lps_list(needle: &str)->Vec<usize>{
+   if needle.len() == 0{
+      return vec![0];
+   }
+
+   let mut lps = vec![0;needle.len()];
+   let mut prev_lps = 0;
+   let mut lps_i = 1; 
+   while lps_i < needle.len(){
+      if needle.chars().nth(lps_i) == needle.chars().nth(prev_lps){
+         lps[lps_i] = prev_lps + 1;
+         prev_lps += 1;
+         lps_i += 1;
+      }else{
+         if prev_lps == 0{
+            lps[lps_i] = 0; 
+            lps_i += 1;
+         }else{
+            prev_lps = lps[prev_lps - 1];
+         }
+      }
+   }
+   lps
+}
+
+
+pub fn find_bin(haystack: &[u8], needle: &[u8])->Vec<usize>{
+   let mut h = 0; 
+   let mut n = 0; 
+   let mut occurances = Vec::new();
+   let lps = build_bin_lps_list(needle);
+   while h < haystack.len(){
+      if haystack[h] == needle[n]{
+         h += 1;
+         n += 1;
+      }else{
+         if n == 0{
+            h += 1;
+         }else{
+            n = lps[n - 1];
+         }
+      }
+      if n == needle.len(){
+         occurances.push(h - needle.len());
+         n = 0;
+      }
+   }
+
+   return occurances;
+
+}
+
+pub fn build_bin_lps_list(needle: &[u8])->Vec<usize>{
+   if needle.len() == 0{
+      return vec![0];
+   }
+
+   let mut lps = vec![0;needle.len()];
+   let mut prev_lps = 0;
+   let mut lps_i = 1; 
+   while lps_i < needle.len(){
+      if needle[lps_i] == needle[prev_lps]{
+         lps[lps_i] = prev_lps + 1;
+         prev_lps += 1;
+         lps_i += 1;
+      }else{
+         if prev_lps == 0{
+            lps[lps_i] = 0; 
+            lps_i += 1;
+         }else{
+            prev_lps = lps[prev_lps - 1];
+         }
+      }
+   }
+   lps
+}
 /*fn find_symbol_ignore_gnu_as_marks(symbols: &Vec<(usize, String)>, trget: usize)->Option<usize>{
    println!("symbols {:?}",symbols);
    println!("searching for symbol at {}",trget);

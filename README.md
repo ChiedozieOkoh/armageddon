@@ -28,6 +28,9 @@ The simulator will continue running until it encounters an error. \
 Use the halt button to stop execution at anytime. \
 Use the close button to close the simulator.
 
+## Shortcuts
+`Alt + Enter` : centres the disassembly around the instruction pointed to by the `PC` register.
+
 ## Using Exceptions
 The vector table offset is always 0 and is not configurable. Therefore if you want exceptions to be 
 simulated properly you should make sure the vector table is at the beginning of the binary e.g
@@ -78,8 +81,8 @@ SECTIONS{
 * finally simulate the linked executable `armageddon code.o` 
 
 ## Memory Usage
-Currently the size of memory available to the simulator is the same as the size of the \
-ELF file passed as a command line arguement. 
+Currently the size of memory available to the simulator is the same as the size as the \
+text section of the ELF file passed as a command line arguement. 
 
 ## Notes On compatability with ARMv6-M ISA 
 The simulator is still in development so not all instructions are implemented yet.\

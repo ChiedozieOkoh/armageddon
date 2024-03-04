@@ -38,6 +38,13 @@ pub fn from_arm_bytes(word: [u8;4])-> u32{
    u32::from_le_bytes(word)
 }
 
+#[macro_export]
+macro_rules! to_arm_bytes {
+   ($_type:ty,$val:expr) => {
+      <$_type>::to_le_bytes($val)
+   };
+}
+
 pub fn into_arm_bytes(word: u32)->[u8;4]{
    u32::to_le_bytes(word)
 }
@@ -83,6 +90,19 @@ pub fn get_bitfield<const LEN: u32>(v: u32, start: u32)->BitField<LEN>{
    (res >> start).into()
 }
 
+pub fn sign_extend_u32<const A: u32>(num: u32)->u32{
+   debug_assert!(A != 0);
+   let mask = 1 << (A-1);
+   if num & mask > 0{
+      //dbg_ln!("adding extra bits");
+      let extra_bits = u32::MAX - umax::<A>();
+      //dbg_ln!("msk={:#x},val={:#x}\n{:#x} | {:#x} = {:#x}",extra_bits,x.0,extra_bits,x.0,extra_bits|x.0);
+      let extended = extra_bits | num;
+      extended 
+   }else{
+      num 
+   }
+}
 pub fn sign_extend<const A: u32>(x: BitField<A>)->i32{
    debug_assert!(A != 0);
    let mask = 1 << (A-1);
