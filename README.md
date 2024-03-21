@@ -101,5 +101,7 @@ If you encounter any bugs please open an issue :)
 - [X] Support NMI through memory mapped SCS
 - [ ] Allow breakpoints to be added by clicking on a line of text in the disassembly
 - [ ] Add an option to  execute the reset handler as part of the start up routine
-- [ ] Allow Search Function to also search symbol names
-- [ ] fix bug where search results dont show if the result is present on the IR line
+- [x] Allow Search Function to also search symbol names
+- [x] fix bug where search results dont show if the result is present on the IR line
+- [ ] add a line limit to the execution logs
+- [ ] support focus on code search results

@@ -22,5 +22,7 @@ target remote :3333
 monitor reset init
 break test_start 
 load
+b BREAKPOINT
+continue
 register_trace
 echo <<FINISHED_PROC_LOG>>\n

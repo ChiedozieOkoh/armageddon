@@ -133,6 +133,29 @@ fn symbol_aware_disassemble(
 
 }
 
+pub struct AsmLine{
+   pub address: usize,
+   pub token: Token
+}
+
+pub enum Token{
+   instr(Instruction),
+   sym(Symbol),
+   data(RawData)
+}
+
+pub struct Instruction{
+   pub representation: String,
+}
+
+pub struct Symbol{
+   pub name: String,
+}
+
+pub struct RawData{
+   pub representation: String,
+}
+
 //TODO refactor so that lambdas don't needlessly allocate new strings
 pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<SymbolDefinition>)->Vec<String>{
    let src_code = disassemble(

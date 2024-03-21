@@ -269,7 +269,27 @@ fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
    ].spacing(5).into()
 }
 
-fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextPosition, _focus: bool)->Row<'a,Event,iced::Renderer>{
+/*
+fn highlight_or_default<'a>(target: &String,line: &str, search_result: &Vec<TextPosition>, sr_idx: usize,_focus: bool)->(usize,Row<'a,Event,iced::Renderer>){
+   let current = current_search_result(&search_results,sr_idx);
+   let mut new_idx = sr_idx;
+   let brkpt_text = if current.is_some_and(|sr| sr == line_number){
+      let v = highlight_search_result(
+         &app.searchbar.as_ref().unwrap().target,
+         line,
+         &search_results[sr_idx],
+         false
+         );
+      new_idx += 1;
+      v
+   }else{
+      row![text(line).size(TEXT_SIZE)]
+   };
+   return (new_idx,brkpt_text);
+}
+*/
+
+fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextPosition, _focus: bool, normal_font: Option<(iced::Color,iced::Font)>)->Row<'a,Event,iced::Renderer>{
    let offset = current_result.line_offset;
    let hl_len = target.len();
    let hl_region = line.get(offset .. offset + hl_len).unwrap();
@@ -277,7 +297,13 @@ fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextP
    let after =  line.get(offset + hl_len ..);
    let mut text_box = Row::new();
    if before.is_some(){
-      text_box = text_box.push(text(before.unwrap()).size(TEXT_SIZE));
+      let mut t = text(before.unwrap()).size(TEXT_SIZE);
+      if normal_font.is_some(){
+         let (c,f) = normal_font.clone().unwrap();
+         t = t.style(c)
+              .font(f);
+      }
+      text_box = text_box.push(t);
    }
    text_box = text_box.push(
       text(hl_region)
@@ -289,7 +315,13 @@ fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextP
          })
    );
    if after.is_some(){
-      text_box = text_box.push(text(after.unwrap()).size(TEXT_SIZE));
+      let mut t = text(after.unwrap()).size(TEXT_SIZE);
+      if normal_font.is_some(){
+         let (c,f) = normal_font.clone().unwrap();
+         t = t.style(c)
+              .font(f);
+      }
+      text_box = text_box.push(t);
    }
 
    text_box.padding(0).height(iced::Length::Shrink)
@@ -328,7 +360,7 @@ fn pane_render<'a>(
             println!("current search result ptr {:?}",c_search_result);
             let current = sr_idx;
             sr_idx += 1;
-            highlight_search_result(&app.searchbar.as_ref().unwrap().target, highlighted, &search_results[current], false)
+            highlight_search_result(&app.searchbar.as_ref().unwrap().target, highlighted, &search_results[current], false, None)
          }else{
             row![text(highlighted).size(TEXT_SIZE)]
          };
@@ -347,11 +379,32 @@ fn pane_render<'a>(
                      .width(iced::Length::Fill)
                   );
                //}
+               //
+                  let current = current_search_result(&search_results,sr_idx);
+                  let inner_text  = if current.is_some_and(|sr| sr == line_number){
+                     let v = highlight_search_result(
+                        &app.searchbar.as_ref().unwrap().target,
+                        line,
+                        &search_results[sr_idx],
+                        false,
+                        Some((
+                           iced::color!(100,0,0),
+                           iced::Font{
+                              .. Default::default()
+                           }))
+                        );
+                     sr_idx += 1;
+                     v
+                  }else{
+                     row![
+                        text(line)
+                           .size(TEXT_SIZE)
+                           .style(iced::color!(100,0,0))
+                           .width(iced::Length::Fill)
+                     ]
+                  };
                text_box = text_box.push(
-                  text(line)
-                  .size(TEXT_SIZE)
-                  .width(iced::Length::Fill)
-                  .style(iced::color!(100,0,0))
+                  inner_text
                );
                un_highlighted.clear();
             }else{
@@ -371,14 +424,37 @@ fn pane_render<'a>(
                                  .width(iced::Length::Fill)
                               );
                            }
-                           text_box = text_box.push(
+
+                           let current = current_search_result(&search_results,sr_idx);
+                           let bold  = if current.is_some_and(|sr| sr == line_number){
+                              let v = highlight_search_result(
+                                 &app.searchbar.as_ref().unwrap().target,
+                                 line,
+                                 &search_results[sr_idx],
+                                 false,
+                                 Some((
+                                    iced::color!(0,0,0),
+                                    iced::Font{
+                                    weight: iced::font::Weight::Bold,
+                                    .. Default::default()}
+                                 ))
+                              );
+                              sr_idx += 1;
+                              v
+                           }else{
+                              row![
                               text(line)
-                              .size(TEXT_SIZE)
-                              .width(iced::Length::Fill)
-                              .font(iced::Font{
-                                 weight: iced::font::Weight::Bold,
-                                 .. Default::default()
-                              })
+                                 .size(TEXT_SIZE)
+                                 .width(iced::Length::Fill)
+                                 .font(iced::Font{
+                                    weight: iced::font::Weight::Bold,
+                                    .. Default::default()
+                                 })
+                              ]
+                           };
+
+                           text_box = text_box.push(
+                              bold
                            );
                            un_highlighted.clear();
 
@@ -391,7 +467,21 @@ fn pane_render<'a>(
                               );
                            }
                            un_highlighted.clear();
-                           text_box = text_box.push(container(text(line).size(TEXT_SIZE)).style(brkpt_theme).padding(0));
+                           let current = current_search_result(&search_results,sr_idx);
+                           let brkpt_text = if current.is_some_and(|sr| sr == line_number){
+                              let v = highlight_search_result(
+                                 &app.searchbar.as_ref().unwrap().target,
+                                 line,
+                                 &search_results[sr_idx],
+                                 false,
+                                 None
+                              );
+                              sr_idx += 1;
+                              v
+                           }else{
+                              row![text(line).size(TEXT_SIZE)]
+                           };
+                           text_box = text_box.push(container(brkpt_text).style(brkpt_theme).padding(0));
                         }else{
                            let current = current_search_result(&search_results,sr_idx);
                            if current.is_some_and(|sr| sr == line_number){
@@ -411,7 +501,8 @@ fn pane_render<'a>(
                                     &app.searchbar.as_ref().unwrap().target,
                                     line,
                                     &search_results[sr_idx],
-                                    false
+                                    false,
+                                    None
                                  )
                               );
                               sr_idx += 1;
@@ -720,7 +811,8 @@ impl Application for App{
 
          Event::Ui(Gui::FocusNextSearchResult)=>{
             let _ = self.searchbar.as_mut().unwrap().focus_next();
-         }
+         },
+
          Event::Ui(Gui::SubmitSearch)=>{
             let sb = self.searchbar.as_mut().unwrap();
             sb.target = sb.pending.clone();
@@ -729,7 +821,7 @@ impl Application for App{
                 Ok(_) => {},
                 Err(e) => println!("error occured during search {:?}",e),
             }
-         }
+         },
 
          Event::Ui(Gui::CentreDisassembler)=>{
             let ir = self.sys_view.raw_ir;
