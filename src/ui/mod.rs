@@ -296,6 +296,11 @@ fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextP
    let before = line.get(.. offset);
    let after =  line.get(offset + hl_len ..);
    let mut text_box = Row::new();
+   let highlight_clr = if _focus{
+      iced::color!(0,0,100)
+   }else{
+      iced::color!(100,0,0)
+   };
    if before.is_some(){
       let mut t = text(before.unwrap()).size(TEXT_SIZE);
       if normal_font.is_some(){
@@ -305,15 +310,17 @@ fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextP
       }
       text_box = text_box.push(t);
    }
+
    text_box = text_box.push(
       text(hl_region)
          .size(TEXT_SIZE)
-         .style(iced::color!(100,0,0))
+         .style(highlight_clr)
          .font(iced::Font{
             weight: iced::font::Weight::Bold,
             .. Default::default()
          })
    );
+
    if after.is_some(){
       let mut t = text(after.unwrap()).size(TEXT_SIZE);
       if normal_font.is_some(){
@@ -359,8 +366,9 @@ fn pane_render<'a>(
          }else if c_search_result.is_some_and(|sr| sr == line_number){
             println!("current search result ptr {:?}",c_search_result);
             let current = sr_idx;
+            let focused = app.searchbar.as_ref().unwrap().is_nth_term_focused(current);
             sr_idx += 1;
-            highlight_search_result(&app.searchbar.as_ref().unwrap().target, highlighted, &search_results[current], false, None)
+            highlight_search_result(&app.searchbar.as_ref().unwrap().target, highlighted, &search_results[current], focused, None)
          }else{
             row![text(highlighted).size(TEXT_SIZE)]
          };
@@ -382,11 +390,15 @@ fn pane_render<'a>(
                //
                   let current = current_search_result(&search_results,sr_idx);
                   let inner_text  = if current.is_some_and(|sr| sr == line_number){
+                     let focused = app.searchbar.as_ref()
+                        .unwrap()
+                        .is_nth_term_focused(sr_idx);
+
                      let v = highlight_search_result(
                         &app.searchbar.as_ref().unwrap().target,
                         line,
                         &search_results[sr_idx],
-                        false,
+                        focused,
                         Some((
                            iced::color!(100,0,0),
                            iced::Font{
@@ -427,11 +439,15 @@ fn pane_render<'a>(
 
                            let current = current_search_result(&search_results,sr_idx);
                            let bold  = if current.is_some_and(|sr| sr == line_number){
+                              let focused = app.searchbar.as_ref()
+                                 .unwrap()
+                                 .is_nth_term_focused(sr_idx);
+
                               let v = highlight_search_result(
                                  &app.searchbar.as_ref().unwrap().target,
                                  line,
                                  &search_results[sr_idx],
-                                 false,
+                                 focused,
                                  Some((
                                     iced::color!(0,0,0),
                                     iced::Font{
@@ -469,11 +485,15 @@ fn pane_render<'a>(
                            un_highlighted.clear();
                            let current = current_search_result(&search_results,sr_idx);
                            let brkpt_text = if current.is_some_and(|sr| sr == line_number){
+                              let focused = app.searchbar.as_ref()
+                                 .unwrap()
+                                 .is_nth_term_focused(sr_idx);
+
                               let v = highlight_search_result(
                                  &app.searchbar.as_ref().unwrap().target,
                                  line,
                                  &search_results[sr_idx],
-                                 false,
+                                 focused,
                                  None
                               );
                               sr_idx += 1;
@@ -496,12 +516,16 @@ fn pane_render<'a>(
                                  un_highlighted.clear();
                               }
 
+                              let focused = app.searchbar.as_ref()
+                                 .unwrap()
+                                 .is_nth_term_focused(sr_idx);
+
                               text_box = text_box.push(
                                  highlight_search_result(
                                     &app.searchbar.as_ref().unwrap().target,
                                     line,
                                     &search_results[sr_idx],
-                                    false,
+                                    focused,
                                     None
                                  )
                               );
@@ -811,6 +835,19 @@ impl Application for App{
 
          Event::Ui(Gui::FocusNextSearchResult)=>{
             let _ = self.searchbar.as_mut().unwrap().focus_next();
+            let position = self.searchbar.as_ref()
+               .unwrap()
+               .get_focused_search_result()
+               .unwrap();
+
+            let total_lines = self.disasm.lines().count();
+            let ratio = position.line_number as f32 / total_lines as f32;
+            dbg_ln!("estimated ratio {} / {} =  {}",
+                    position.line_number,
+                    total_lines,
+                    ratio
+                   );
+            cmd = iced::widget::scrollable::snap_to(self.diasm_win_id.clone(), scrollable::RelativeOffset { x: 0.0, y: ratio });
          },
 
          Event::Ui(Gui::SubmitSearch)=>{

@@ -70,6 +70,25 @@ impl SearchBar{
       }
    }
 
+   pub fn is_nth_term_focused(&self, term: usize)->bool{
+      match &self.focus{
+         Some(f) => {*f == term},
+         None => {false}
+      }
+   }
+
+   pub fn get_focused_search_result(&self)->Option<TextPosition>{
+      match &self.focus{
+         Some(f) => {
+            match &self.occurances{
+               Occurance::Text(ref v) => Some(v[*f].clone()),
+               Occurance::Bin(_) => todo!(),
+            }
+         },
+         None => {None}
+      }
+   }
+
    pub fn text_occurances(&self)->Vec<TextPosition>{
       match &self.occurances{
         Occurance::Text(ref v) => v.clone(),
