@@ -8,7 +8,7 @@ use crate::elf::decoder::{
    get_all_section_headers,
    is_text_section_hdr,
    SectionHeader,
-   read_text_section, is_symbol_table_section_hdr, get_section_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map,  get_text_section_symbols, get_entry_point_offset, LiteralPools, get_all_symbol_names, SymbolType, SymbolDefinition
+   read_text_section, is_symbol_table_section_hdr, get_section_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map,  get_text_section_symbols, get_entry_point_offset, LiteralPools, get_all_symbol_names, SymbolType, SymbolDefinition, get_section_names, get_loadable_sections, Section, LoadType
 };
 
 pub fn write_asm_make_elf(path: &str, data: &[u8])->Result<PathBuf, std::io::Error>{
@@ -102,6 +102,86 @@ pub fn link_elf(new_elf: &Path, elf: &Path, linker_script: &Path){
    println!("{:?}",std::str::from_utf8(&sh.stdout[..]).unwrap());
    println!("{:?}",std::str::from_utf8(&sh.stderr[..]).unwrap());
    assert!(sh.status.success());
+}
+
+#[test]
+fn should_map_sections()->Result<(),std::io::Error>{
+   let rel_elf = write_asm_make_elf(
+      "./assembly_tests/section_map.s", 
+      concat!(
+         ".thumb\n",
+         ".text\n",
+         ".global _entry_point\n",
+         "_entry_point:\n",
+         "   NOP\n",
+         "   NOP\n",
+         ".data\n",
+         "      .4byte 70,32,12,700\n",
+         ".bss\n",
+         "      .lcomm zero_counter_v, 8\n"
+      ).as_bytes()
+   )?;
+
+   let mut ld_script = File::create("./assembly_tests/section.ld")?;
+
+   let text_offset: usize = 0;
+   let data_offset: usize = 0x1000;
+   let bss_offset: usize = 0x2000;
+   ld_script.write_all(
+      format!(
+         "ENTRY(_entry_point);\n\
+         SECTIONS{{\n\
+             \t. = {:#x};\n\
+             \t.text : {{*(.text)}}\n\
+             \t. = {:#x};\n\
+             \t.data : {{*(.data)}}\n\
+             \t. = {:#x};\n\
+             \t.bss : {{*(.bss)}}\n\
+         }}\n",text_offset,data_offset,bss_offset
+      ).as_bytes()
+   )?;
+
+   let linked = Path::new("./assembly_tests/ld_section.out");
+   link_elf(&linked, &rel_elf, Path::new("./assembly_tests/section.ld"));
+
+   let (elf_header,mut reader) = get_header(&linked).unwrap();
+   assert_eq!(text_offset,get_entry_point_offset(&elf_header), "entry point offset should be at the beginning of text segment");
+
+   let section_headers = get_all_section_headers(&mut reader, &elf_header).unwrap();
+   assert!(!section_headers.is_empty());
+
+   let sects  = get_loadable_sections(&mut reader, &elf_header, &section_headers).unwrap();
+
+   let t = sects.iter().position(|ld| ld.name.eq(".text")).unwrap();
+   let d = sects.iter().position(|ld| ld.name.eq(".data")).unwrap();
+   let b = sects.iter().position(|ld| ld.name.eq(".bss")).unwrap();
+   assert_eq!(
+      sects[t],
+      Section{
+         name: String::from(".text"),
+         start: text_offset as u32,
+         len: 4,
+         load: LoadType::PROGBITS
+      });
+
+   assert_eq!(
+      sects[d],
+      Section{
+         name: String::from(".data"),
+         start: data_offset as u32,
+         len: 4 * 4,
+         load: LoadType::PROGBITS
+      });
+
+   assert_eq!(
+      sects[b],
+      Section{
+         name: String::from(".bss"),
+         start: bss_offset as u32,
+         len: 8,
+         load: LoadType::NOBITS
+      });
+   Ok(())
 }
 
 #[test]

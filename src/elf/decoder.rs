@@ -292,6 +292,141 @@ pub fn get_string_table_section_hdr(header: &ElfHeader, section_headers: &Vec<Se
    return None;
 }
 
+
+#[derive(Debug,PartialEq)]
+pub enum LoadType{
+   PROGBITS,
+   NOBITS
+}
+
+#[derive(Debug,PartialEq)]
+pub struct Section{
+   pub name: String,
+   pub start: u32,
+   pub len: u32,
+   pub load: LoadType
+}
+
+pub fn get_loadable_sections(
+      reader: &mut BufReader<File>,
+      header: &ElfHeader,
+      sect_hdrs: &Vec<SectionHeader>
+   )->Result<Vec<Section>,ElfError>{
+   let mut loadable_sections = Vec::new();
+   let sh_str_table_hdr = get_sh_string_table_header(header, sect_hdrs);
+   for (i,hdr) in sect_hdrs.iter().enumerate(){
+      let flags = to_native_endianness_32b( header, &hdr.flags);
+      if flags & (SectionHeaderFlag::Allocatable as u32)>0{
+         let name = section_name(reader,header,hdr,sh_str_table_hdr)?;
+         println!("section header {} == {}",i,name);
+         let _type = to_native_endianness_32b(header, &hdr._type);
+         let addr = to_native_endianness_32b(header, &hdr._addr_in_memory_img);
+         let size = to_native_endianness_32b(header, &hdr.section_size_in_bytes);
+         if _type == SectionHeaderType::NOBITS as u32 {
+            println!("{} section origin: {} len: {} type: NOBITS",name,addr,size);
+            loadable_sections.push(Section{
+                name,
+                start: addr,
+                len: size,
+                load: LoadType::NOBITS,
+            });
+         }else if _type == SectionHeaderType::PROGBITS as u32{
+            println!("{} section origin: {} len: {} type: PROGBITS",name,addr,size);
+            loadable_sections.push(Section{
+                name,
+                start: addr,
+                len: size,
+                load: LoadType::PROGBITS,
+            });
+         }
+      }
+   }
+
+   Ok(loadable_sections)
+}
+
+fn section_name(
+      reader: &mut BufReader<File>,
+      header: &ElfHeader,
+      sect_hdr: &SectionHeader,
+      sh_str_table_hdr: &SectionHeader
+   )->Result<String, ElfError>{
+   let offset = to_native_endianness_32b(
+      header,
+      &sh_str_table_hdr.offset_of_entries_in_bytes
+   );
+   let table_size = to_native_endianness_32b(
+      header,
+      &sh_str_table_hdr.section_size_in_bytes
+   );
+
+   let mut str_buffer = vec![0_u8;table_size as usize];
+   reader.seek(std::io::SeekFrom::Start(offset as u64))?;
+   reader.read_exact(&mut str_buffer)?;
+   let sh_str_name = to_native_endianness_32b(header, &sh_str_table_hdr.name);
+   //let mut name_map = vec![String::new();sect_hdrs.len()];
+
+   let mut section_name = String::new();
+   let name = to_native_endianness_32b(header, &sect_hdr.name);
+   if name != sh_str_name{
+      let mut c = name as usize;
+      while str_buffer[c] as char != '\0' && (c < str_buffer.len()){
+         section_name.push(str_buffer[c] as char);
+         c += 1;
+      }
+      println!("section hdr == {}",section_name);
+      //name_map.insert(i,section_name.clone());
+      //name_map[i].push_str(&section_name);
+   }
+
+   Ok(section_name)
+}
+
+
+
+pub fn get_section_names(
+      reader: &mut BufReader<File>,
+      header: &ElfHeader,
+      sect_hdrs: &Vec<SectionHeader>
+   )->Result<Vec<String>, ElfError>{
+   let sh_str_table_hdr = get_sh_string_table_header(header, sect_hdrs);
+   let offset = to_native_endianness_32b(
+      header,
+      &sh_str_table_hdr.offset_of_entries_in_bytes
+   );
+   let table_size = to_native_endianness_32b(
+      header,
+      &sh_str_table_hdr.section_size_in_bytes
+   );
+
+   let mut str_buffer = vec![0_u8;table_size as usize];
+   reader.seek(std::io::SeekFrom::Start(offset as u64))?;
+   reader.read_exact(&mut str_buffer)?;
+   let sh_str_name = to_native_endianness_32b(header, &sh_str_table_hdr.name);
+   let mut section_name = String::new();
+   //let mut name_map = vec![String::new();sect_hdrs.len()];
+   let mut name_list = Vec::new();
+   for (i,hdr) in sect_hdrs.iter().enumerate(){
+      let name = to_native_endianness_32b(
+         header,
+         &hdr.name
+      );
+      if name != sh_str_name{
+         let mut c = name as usize;
+         while str_buffer[c] as char != '\0' && (c < str_buffer.len()){
+            section_name.push(str_buffer[c] as char);
+            c += 1;
+         }
+         println!("section hdr {} == {}",i,section_name);
+         //name_map.insert(i,section_name.clone());
+         //name_map[i].push_str(&section_name);
+         name_list.push(section_name.clone());
+         section_name.clear();
+      }
+   }
+   Ok(name_list)
+}
+
 pub fn get_sh_string_table_header<'a>(header: &'a ElfHeader, section_headers: &'a Vec<SectionHeader>)->&'a SectionHeader{
    let sh_name_table_index = to_native_endianness_16b(header, &header.section_header_table_index);
    let section = &section_headers[sh_name_table_index as usize];
@@ -531,7 +666,7 @@ fn get_matching_sym_in_place(
 
    for symbol in sym_entries{
       let mut index = to_native_endianness_32b(elf_header, &symbol.name_index) as usize;
-      while str_buffer[index] as char != '\0'{
+      while str_buffer[index] as char != '\0' && index < str_buffer.len(){
          symbol_name.push(str_buffer[index] as char);
          index += 1;
       }
@@ -658,6 +793,12 @@ impl LiteralPools{
       }
    }
 }
+
+/*
+pub struct SectionMap{
+}
+pub fn read_section_map(){
+}*/
 
 pub fn read_text_section(
    reader: &mut BufReader<File>,

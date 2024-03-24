@@ -104,4 +104,6 @@ If you encounter any bugs please open an issue :)
 - [x] Allow Search Function to also search symbol names
 - [x] fix bug where search results dont show if the result is present on the IR line
 - [ ] add a line limit to the execution logs
-- [ ] support focus on code search results
+- [x] support focus on code search results
+- [ ] disassemble `.text` and `.data` sections by default 
+- [ ] add command line option to force a section to be included in the disassembly

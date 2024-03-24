@@ -57,6 +57,7 @@ fn cli_disasm(){
    let args: Vec<String> = std::env::args().collect();
    if args.len() != 2{
       dbg_ln!("you must provide one elf file");
+      print_help();
       std::process::exit(-1);
    }
 
