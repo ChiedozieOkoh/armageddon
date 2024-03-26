@@ -313,11 +313,11 @@ pub fn get_loadable_sections(
       sect_hdrs: &Vec<SectionHeader>
    )->Result<Vec<Section>,ElfError>{
    let mut loadable_sections = Vec::new();
-   let sh_str_table_hdr = get_sh_string_table_header(header, sect_hdrs);
+   let section_names = get_section_names(reader,header,sect_hdrs)?;
    for (i,hdr) in sect_hdrs.iter().enumerate(){
       let flags = to_native_endianness_32b( header, &hdr.flags);
       if flags & (SectionHeaderFlag::Allocatable as u32)>0{
-         let name = section_name(reader,header,hdr,sh_str_table_hdr)?;
+         let name = &section_names[i];
          println!("section header {} == {}",i,name);
          let _type = to_native_endianness_32b(header, &hdr._type);
          let addr = to_native_endianness_32b(header, &hdr._addr_in_memory_img);
@@ -325,7 +325,7 @@ pub fn get_loadable_sections(
          if _type == SectionHeaderType::NOBITS as u32 {
             println!("{} section origin: {} len: {} type: NOBITS",name,addr,size);
             loadable_sections.push(Section{
-                name,
+                name: name.clone(),
                 start: addr,
                 len: size,
                 load: LoadType::NOBITS,
@@ -333,7 +333,7 @@ pub fn get_loadable_sections(
          }else if _type == SectionHeaderType::PROGBITS as u32{
             println!("{} section origin: {} len: {} type: PROGBITS",name,addr,size);
             loadable_sections.push(Section{
-                name,
+                name: name.clone(),
                 start: addr,
                 len: size,
                 load: LoadType::PROGBITS,
@@ -405,7 +405,7 @@ pub fn get_section_names(
    let sh_str_name = to_native_endianness_32b(header, &sh_str_table_hdr.name);
    let mut section_name = String::new();
    //let mut name_map = vec![String::new();sect_hdrs.len()];
-   let mut name_list = Vec::new();
+   let mut name_list = vec![String::from("");sect_hdrs.len()];
    for (i,hdr) in sect_hdrs.iter().enumerate(){
       let name = to_native_endianness_32b(
          header,
@@ -419,8 +419,7 @@ pub fn get_section_names(
          }
          println!("section hdr {} == {}",i,section_name);
          //name_map.insert(i,section_name.clone());
-         //name_map[i].push_str(&section_name);
-         name_list.push(section_name.clone());
+         name_list[i].push_str(&section_name);
          section_name.clear();
       }
    }

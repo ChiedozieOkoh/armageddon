@@ -13,7 +13,7 @@ use std::path::Path;
 use elf::decoder::{ElfError, SymbolDefinition};
 use iced::Application;
 
-use crate::asm::interpreter::print_assembly;
+use crate::asm::interpreter::{print_assembly, disasm_text};
 use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_entry_point_offset, get_all_symbol_names};
 use crate::system::System;
 use crate::ui::App;
@@ -46,10 +46,16 @@ fn gui_diasm(){
    exit_on_err(&maybe_instructions);
 
    let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
-   let mut sys = System::create_from_text(instructions);
-   println!("sys memory image: 0 -> {}",sys.memory.len());
+   let disasm = disasm_text(&instructions, entry_point, &symbol_map);
+   let mut msg = String::new(); 
+   for i in disasm.into_iter(){
+      msg.push_str(&i);
+      msg.push('\n');
+   }
+   let mut sys = System::fill_with(&instructions);
+   println!("sys memory image: 0 -> {} pages ",sys.alloc.pages());
    sys.set_pc(entry_point & (!1)).unwrap();
-   let flags = (sys,entry_point,symbol_map);
+   let flags = (sys,entry_point,symbol_map, msg);
    App::run(iced::Settings::with_flags(flags)).unwrap();
 }
 

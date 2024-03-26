@@ -26,10 +26,11 @@ pub struct System{
    pub scs: SystemControlSpace,
    pub mode: Mode,
    primask: bool,
-   pub memory: Vec<u8>,
+   //pub memory: Vec<u8>,
    pub breakpoints: Vec<usize>,
    pub trace_enabled: bool,
-   pub trace: String
+   pub trace: String,
+   pub alloc: BlockAllocator,
 }
 
 #[derive(Clone,Debug)]
@@ -74,6 +75,127 @@ macro_rules! conditional_branches{
 
 type ProcessStackFrame = [u32;8];
 
+pub const PAGE_SIZE: usize = 2048; 
+pub type Page = [u8;PAGE_SIZE];
+use std::collections::HashMap;
+pub struct BlockAllocator{
+   memory: HashMap<u32,Page>
+}
+
+impl BlockAllocator{
+
+   pub fn create()->Self{
+      let mut mem = HashMap::new();
+      mem.insert(0_u32,[0_u8;PAGE_SIZE]);
+      Self{memory: mem}
+   }
+
+   pub fn fill(data: &[u8])->Self{
+      let mut memory = HashMap::new();
+      for (page_num, block) in data.chunks(PAGE_SIZE).enumerate(){
+         let mut page: Page = [0;PAGE_SIZE];
+         page[.. block.len()].copy_from_slice(block);
+         memory.insert(page_num as u32, page);
+      }
+      Self{memory}
+   }
+
+   pub fn view(&self, start: u32, inclusive_end: u32)->Vec<u8>{
+      let page_num = start / (PAGE_SIZE as u32);
+      let offset = start - (page_num * PAGE_SIZE as u32);
+
+      let mut result = Vec::new();
+
+      let mut i = offset; 
+      let mut page_counter = page_num;
+
+      let def_page: Page = [0;PAGE_SIZE];
+      let mut block = match self.memory.get(&page_counter){
+         Some(p) => p,
+         None => &def_page,
+      };
+      for _ in start ..= inclusive_end{
+         result.push(block[i as usize]);
+         if i == PAGE_SIZE as u32 -1{
+            i = 0; 
+            page_counter += 1;
+
+            block = match self.memory.get(&page_counter){
+               Some(p) => p,
+               None => &def_page,
+            };
+         }else{
+            i += 1;
+         }
+      }
+
+      result
+   }
+
+   pub fn pages(&self)->usize{
+      self.memory.len()
+   }
+
+   pub fn get_instr_32b(&self, addr: u32)->[u8;4]{
+      let page_num = addr / (PAGE_SIZE as u32);
+      let offset = addr - (page_num * PAGE_SIZE as u32);
+
+      match self.memory.get(&page_num){
+         Some(page) => {
+            if (offset as usize + 4) <= PAGE_SIZE{
+               page[offset as usize .. (offset as usize + 4)]
+                  .try_into()
+                  .expect("simulator error: access should be within page limits")
+            }else{
+               assert_eq!(offset as usize,PAGE_SIZE - 2,"simulator err: tried instruction fetch not 16b aligned");
+               let end_page_num = page_num + 1;
+               let mut word = [page[PAGE_SIZE-2], page[PAGE_SIZE-1],0,0];
+               match self.memory.get(&end_page_num){
+                  Some(next_page) => {
+                     word[2] = next_page[0];
+                     word[3] = next_page[1];
+                  },
+                  None => {},
+               }
+               word
+            }
+         },
+         None => [0;4],
+      }
+   }
+
+   pub fn get<const T: usize>(&self, addr: u32)->[u8;T]{
+      let page_num = addr / (PAGE_SIZE as u32);
+      let offset = addr - (page_num * PAGE_SIZE as u32);
+      assert!((offset as usize) + T <= PAGE_SIZE,"{}-byte access to {} should be aligned so this should never happen, this is a simulator bug",T,addr);
+
+      match self.memory.get(&page_num){
+         Some(page) => {
+            page[offset as usize .. (offset as usize + T)]
+               .try_into()
+               .expect("simulator error: access should be within page limits")
+         },
+         None => [0;T],
+      }
+   }
+
+   pub fn put<const T: usize>(&mut self, start_addr: u32, values: [u8;T]){
+      let page_num = start_addr / (PAGE_SIZE as u32);
+      let offset = start_addr - (page_num * PAGE_SIZE as u32);
+      assert!((offset as usize) + T <= PAGE_SIZE,"{}-byte access to {} should be aligned so this should never happen, this is a simulator bug",T,start_addr);
+      match self.memory.get_mut(&page_num){
+        Some(page) => {
+           page[offset as usize .. (offset as usize + T)].copy_from_slice(&values);
+        },
+        None => {
+           let mut new_page: Page = [0;PAGE_SIZE];
+           new_page[offset as usize .. (offset as usize + T)].copy_from_slice(&values);
+           self.memory.insert(page_num, new_page);
+        },
+      }
+   }
+}
+
 impl System{
    pub fn create(capacity: usize)->Self{
       let registers = Registers::create();
@@ -86,14 +208,15 @@ impl System{
          primask: false,
          scs: SystemControlSpace::reset(),
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
-         memory: vec![0;capacity],
+         //memory: vec![0;capacity],
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new()
+         trace: String::new(),
+         alloc: BlockAllocator::create(),
       }
    }
 
-   pub fn create_from_text(text: Vec<u8>)->Self{
+   pub fn fill_with(text: &[u8])->Self{
       let registers = Registers::create();
       return System{
          registers,
@@ -104,18 +227,14 @@ impl System{
          scs: SystemControlSpace::reset(),
          primask: false,
          mode: Mode::Thread, // when not in a exception the processor is in thread mode
-         memory: text,
+         //memory: Vec::new(),
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new()
+         trace: String::new(),
+         alloc: BlockAllocator::fill(text),
       }
    }
 
-   pub fn expand_memory_to(&mut self, new_size: usize ){
-      if new_size > self.memory.len(){
-         self.memory.resize(new_size, 0);
-      }
-   }
 
    fn update_apsr(&mut self, flags: &ConditionFlags){
       let mut xpsr = from_arm_bytes(self.xpsr);
@@ -1569,9 +1688,10 @@ pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],Arm
    }else{
       fault_if_not_aligned(v_addr, T)?;
       sys.check_permission(v_addr, Access::READ)?;
-      let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
-         .try_into()
-         .expect("should not access out of bounds memory");
+      //let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
+      //   .try_into()
+      //   .expect("should not access out of bounds memory");
+      let mem = sys.alloc.get(v_addr);
       return Ok(mem);
    }
 }
@@ -1579,9 +1699,10 @@ pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],Arm
 pub fn load_thumb_instr(sys: &System, v_addr: u32)->Result<[u8;2],ArmException>{
    fault_if_not_aligned(v_addr, 2)?;
    sys.check_permission(v_addr, Access::Execute)?;
-   let mem: [u8;2] = sys.memory[v_addr as usize .. (v_addr as usize + 2)]
-      .try_into()
-      .expect("should not access out of bounds memory");
+   //let mem: [u8;2] = sys.memory[v_addr as usize .. (v_addr as usize + 2)]
+   //   .try_into()
+   //   .expect("should not access out of bounds memory");
+   let mem = sys.alloc.get::<2>(v_addr);
    return Ok(mem);
 }
 
@@ -1589,9 +1710,10 @@ fn load_instr_32b(sys: &System, addr: u32)->Result<[u8;4],ArmException>{
    //for armv6-m instruction fetches are always 16bit aligned 
    fault_if_not_aligned(addr, 2)?;
    sys.check_permission(addr, Access::Execute)?;
-   let mem: [u8;4] = sys.memory[addr as usize .. (addr as usize + 4)]
-      .try_into()
-      .expect("should not access out of bounds memory");
+   //let mem: [u8;4] = sys.memory[addr as usize .. (addr as usize + 4)]
+   //   .try_into()
+   //   .expect("should not access out of bounds memory");
+   let mem = sys.alloc.get_instr_32b(addr);
    return Ok(mem);
 }
 
@@ -1620,7 +1742,8 @@ pub fn write_memory<const T: usize>(sys: &mut System, v_addr: u32, value: [u8;T]
    }else{
       fault_if_not_aligned(v_addr, T)?;
       sys.check_permission(v_addr, Access::WRITE)?;
-      sys.memory[v_addr as usize ..(v_addr as usize + T )].copy_from_slice(&value);
+      //sys.memory[v_addr as usize ..(v_addr as usize + T )].copy_from_slice(&value);
+      sys.alloc.put(v_addr, value);
       return Ok(());
    }
 }

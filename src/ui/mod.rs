@@ -585,13 +585,14 @@ fn pane_render<'a>(
                if app.update_view{
                   match app.sync_sys.try_lock(){
                     Ok(sys) => {
-                       let start = std::cmp::min(sys.memory.len() - 2,view.start as usize);
-                       let end = std::cmp::min(sys.memory.len() - 1,view.end as usize);
-                       let real_start = std::cmp::min(start,end);
-                       let real_end = std::cmp::max(start,end);
+                       //let start = std::cmp::min(sys.memory.len() - 2,view.start as usize);
+                       //let end = std::cmp::min(sys.memory.len() - 1,view.end as usize);
+                       let real_start = std::cmp::min(view.start,view.end);
+                       let real_end = std::cmp::max(view.start,view.end);
 
-                       let data = &sys.memory[real_start ..= real_end];
-                       let string_data = stringify_slice(data, view.cast.clone());
+                       //let data = &sys.memory[real_start ..= real_end];
+                       let data = sys.alloc.view(real_start,real_end);
+                       let string_data = stringify_slice(&data, view.cast.clone());
                        scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
                     },
                     Err(_) => {
@@ -645,7 +646,7 @@ fn focused_pane(theme: &Theme)->container::Appearance{
 }
 
 impl Application for App{
-   type Flags = (System, usize, Vec<SymbolDefinition>);
+   type Flags = (System, usize, Vec<SymbolDefinition>,String);
    type Message = Event;
    type Theme = Theme;
    type Executor = executor::Default;
@@ -653,23 +654,17 @@ impl Application for App{
    fn new(args: Self::Flags)->(Self,Command<Event>){
       let (state,_) = pane_grid::State::new(PaneType::Disassembler);
       
-      let (mut sys,entry_point, symbols) = args;
-      let disasm = disasm_text(&sys.memory, entry_point, &symbols);
+      let (mut sys,entry_point, symbols, disassembly) = args;
       sys.trace_enabled = true;
       let starting_view: SystemView = (&sys).into();
       let sync_sys_arc = Arc::new(Mutex::new(sys));
       let disasm_id = iced::widget::scrollable::Id::unique();
-      let mut msg = String::new(); 
-      for i in disasm.into_iter(){
-         msg.push_str(&i);
-         msg.push('\n');
-      }
       (Self{
          _state: state,
          n_panes: 1,
          diasm_win_id: disasm_id,
          sync_sys: sync_sys_arc,
-         disasm: msg,
+         disasm: disassembly,
          entry_point,
          symbols,
          sys_view: starting_view,
@@ -853,8 +848,8 @@ impl Application for App{
          Event::Ui(Gui::SubmitSearch)=>{
             let sb = self.searchbar.as_mut().unwrap();
             sb.target = sb.pending.clone();
-            let sys = self.sync_sys.try_lock().unwrap();
-            match sb.find(&self.disasm, &sys.memory[..]){
+            //let sys = self.sync_sys.try_lock().unwrap();
+            match sb.find(&self.disasm){
                 Ok(_) => {},
                 Err(e) => println!("error occured during search {:?}",e),
             }

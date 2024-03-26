@@ -172,10 +172,11 @@ fn run_assembly_armv6m<
 }
 
 fn load_code_into_system(entry_point: usize, code: &[u8])->Result<System, ArmException>{
-   let mut sys = System::create(0);
-   for c in code{
-      sys.memory.push(*c);
-   }
+   //let mut sys = System::create(0);
+   //for c in code{
+   //   sys.memory.push(*c);
+   //}
+   let mut sys = System::fill_with(code);
    sys.set_pc(entry_point)?;
    return Ok(sys);
 }
@@ -197,7 +198,7 @@ pub fn should_do_add()->Result<(),std::io::Error>{
       code.as_bytes(),
       |entry_point, code|{
          let mut sys = load_code_into_system(entry_point, code)?;
-         println!("memory: {:?}",sys.memory);
+         //println!("memory: {:?}",sys.memory);
          sys.registers.generic[0] = 20;
          sys.registers.generic[1] = 40;
          sys.step()?;
@@ -509,7 +510,7 @@ pub fn should_support_ctrl_register()->Result<(), std::io::Error>{
       code,
       |entry_point, binary|{
          let mut sys = load_code_into_system(entry_point, binary)?;
-         sys.expand_memory_to(bin_size);
+         //sys.expand_memory_to(bin_size);
          let i = sys.step()?;  //LDR r0, =0xFFFF
          sys.offset_pc(i)?;
 
@@ -559,7 +560,7 @@ pub fn should_support_stack()->Result<(), std::io::Error>{
       code,
       |entry_point, binary|{
          let mut sys = load_code_into_system(entry_point, binary)?;
-         sys.expand_memory_to(bin_size);
+         //sys.expand_memory_to(bin_size);
          let i = sys.step()?;  //LDR r0, =1024
          sys.offset_pc(i)?;
 
@@ -655,10 +656,11 @@ pub fn support_exceptions()->Result<(),std::io::Error>{
 
    run_elf(&linked, |entry_point, code|{
       let mut sys = load_code_into_system(entry_point, code)?;
-      let word: [u8;4] = sys.memory[..4].try_into().unwrap();
+      //let word: [u8;4] = sys.memory[..4].try_into().unwrap();
+      let word = sys.alloc.get::<4>(0);
       assert!(sys.read_raw_ir() != 0);
       let sp_reset = from_arm_bytes(word);
-      assert_eq!(sp_reset,sys.memory.len() as u32);
+      //assert_eq!(sp_reset,sys.memory.len() as u32);
       let i = sys.step()?; //MOV r0,#0
       sys.offset_pc(i)?;
       assert_eq!(sys.get_ipsr(),0);
@@ -775,10 +777,11 @@ pub fn exception_preemption_test()->Result<(),std::io::Error>{
 
    run_elf(&linked, |entry_point, code|{
       let mut sys = load_code_into_system(entry_point, code)?;
-      let word: [u8;4] = sys.memory[..4].try_into().unwrap();
+      //let word: [u8;4] = sys.memory[..4].try_into().unwrap();
+      let word = sys.alloc.get::<4>(0);
       assert!(sys.read_raw_ir() != 0);
       let sp_reset = from_arm_bytes(word);
-      assert_eq!(sp_reset,sys.memory.len() as u32);
+      //assert_eq!(sp_reset,sys.memory.len() as u32);
 
       for _ in 0..4{
          let i = sys.step()?; 
@@ -815,8 +818,10 @@ pub fn exception_preemption_test()->Result<(),std::io::Error>{
          println!(
             "@: {:#x} in mem value: {:#x},{:#x}",
             nmi_pc,
-            sys.memory[nmi_pc as usize],
-            sys.memory[nmi_pc as usize + 1],
+            //sys.memory[nmi_pc as usize],
+            sys.alloc.get::<1>(nmi_pc)[0],
+            //sys.memory[nmi_pc as usize + 1],
+            sys.alloc.get::<1>(nmi_pc + 1)[0]
            );
 
          
@@ -1164,7 +1169,7 @@ fn run_fibonnaci(nth_term: u32)->Result<u32,std::io::Error>{
       code, 
       |entry_point, code|{
          let mut sys = load_code_into_system(entry_point, code)?;
-         sys.expand_memory_to(bin_size);
+         //sys.expand_memory_to(bin_size);
          sys.registers.generic[0] = nth_term;
 
          while sys.registers.pc < code.len(){
@@ -1195,13 +1200,14 @@ pub fn should_load()->Result<(),std::io::Error>{
       code,
       |entry_point, binary|{
          let mut sys = load_code_into_system(entry_point, binary)?;
-         println!("mem: [{:?}]",sys.memory);
+         //println!("mem: [{:?}]",sys.memory);
          let off = sys.step()?;
          let beef_ptr = sys.registers.generic[0]; 
 
-         let word: [u8;4] = sys.memory[beef_ptr as usize .. beef_ptr as usize + 4]
-            .try_into()
-            .unwrap();
+         //let word: [u8;4] = sys.memory[beef_ptr as usize .. beef_ptr as usize + 4]
+         //   .try_into()
+         //   .unwrap();
+         let word = sys.alloc.get::<4>(beef_ptr);
          assert_eq!(0xBEEF_u32,from_arm_bytes(word));
 
          sys.offset_pc(off)?;
@@ -1239,7 +1245,8 @@ pub fn should_store()->Result<(), std::io::Error>{
          i = sys.step()?;
          sys.offset_pc(i)?;
 
-         let written_word: [u8;4] = sys.memory[ptr .. ptr + 4].try_into().unwrap();
+         //let written_word: [u8;4] = sys.memory[ptr .. ptr + 4].try_into().unwrap();
+         let written_word = sys.alloc.get::<4>(ptr as u32);
          assert_eq!(240, from_arm_bytes(written_word));
 
          return Ok(());

@@ -143,7 +143,7 @@ impl SearchBar{
       }
    }
 
-   pub fn find(&mut self,disasm: &str, _binary: &[u8])->Result<(),SearchError>{
+   pub fn find(&mut self,disasm: &str)->Result<(),SearchError>{
       match &self.kind{
          Kind::Code => {
             let places = find_string_position(disasm, &self.target);
