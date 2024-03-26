@@ -87,4 +87,7 @@ fn allocator_test(){
    allocator.put::<2>(PAGE_SIZE as u32 - 2, [9,8]);
    allocator.put::<2>(PAGE_SIZE as u32,[6,7]);
    assert_eq!(allocator.get_instr_32b(PAGE_SIZE as u32 - 2),[9,8,6,7],"can fetch 32 bit instructions ");
+
+   assert_eq!(allocator.view(PAGE_SIZE as u32 - 2, PAGE_SIZE as u32 + 1),vec![9,8,6,7]);
+   assert_eq!(allocator.view(PAGE_SIZE as u32 - 2, PAGE_SIZE as u32 + 1),vec![9,8,6,7]);
 }
