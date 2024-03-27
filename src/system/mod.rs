@@ -90,6 +90,10 @@ impl BlockAllocator{
       Self{memory: mem}
    }
 
+   pub fn init(memory: HashMap<u32,Page>)->Self{
+      Self{memory}
+   }
+
    pub fn fill(data: &[u8])->Self{
       let mut memory = HashMap::new();
       for (page_num, block) in data.chunks(PAGE_SIZE).enumerate(){
@@ -232,6 +236,43 @@ impl System{
          trace_enabled: false,
          trace: String::new(),
          alloc: BlockAllocator::fill(text),
+      }
+   }
+
+   pub fn with_sections(sections: Vec<(String,u32,Vec<u8>)>)->Self{
+      let mut memory = HashMap::new();
+      for area in sections.into_iter(){
+         let (name, start, data) = area;
+         let mut page_num = start / PAGE_SIZE as u32;
+         let mut offset = start - (page_num * PAGE_SIZE as u32);
+         println!("mapping {} [ {:#x} -> {:#x} ]",name,start,start as usize + data.len());
+         let mut page = memory.entry(page_num).or_insert([0_u8;PAGE_SIZE]);
+         for i in data{
+            page[offset as usize] = i;
+            if offset == (PAGE_SIZE as u32 - 1){
+               page_num += 1;
+               offset = 0;
+               page = memory.entry(page_num).or_insert([0_u8;PAGE_SIZE]);
+            }else{
+               offset += 1;
+            }
+         } 
+      }
+
+      return System{
+         registers: Registers::create(),
+         xpsr: [0;4],
+         control_register: [0;4],
+         event_register: false,
+         active_exceptions: [ExceptionStatus::Inactive; 48],
+         scs: SystemControlSpace::reset(),
+         primask: false,
+         mode: Mode::Thread, // when not in a exception the processor is in thread mode
+         //memory: Vec::new(),
+         breakpoints: Vec::new(),
+         trace_enabled: false,
+         trace: String::new(),
+         alloc: BlockAllocator::init(memory),
       }
    }
 

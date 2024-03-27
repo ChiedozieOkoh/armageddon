@@ -91,3 +91,37 @@ fn allocator_test(){
    assert_eq!(allocator.view(PAGE_SIZE as u32 - 2, PAGE_SIZE as u32 + 1),vec![9,8,6,7]);
    assert_eq!(allocator.view(PAGE_SIZE as u32 - 2, PAGE_SIZE as u32 + 1),vec![9,8,6,7]);
 }
+
+#[test]
+pub fn should_allocate_sections(){
+   let a_data = vec!['A' as u8; 2439];
+   let a_start: u32 = 33;
+
+   let b_data = vec!['B' as u8; 701];
+   let b_start: u32 = 5000;
+
+   let c_data = vec!['C' as u8; 5111];
+   let c_start: u32 = 10000;
+
+   let sections = vec![
+      (String::from("section A"),a_start,a_data.clone()),
+      (String::from("section B"),b_start,b_data.clone()),
+      (String::from("section C"),c_start,c_data.clone())
+   ];
+
+   let sys = System::with_sections(sections);
+
+   let a_res = sys.alloc.view(a_start, a_start + a_data.len() as u32 - 1);
+   let b_res = sys.alloc.view(b_start, b_start + b_data.len() as u32 - 1);
+   let c_res = sys.alloc.view(c_start, c_start + c_data.len() as u32 - 1);
+   println!("a: {} == {} ?",a_res.len(),a_data.len());
+   for i in 0 .. a_res.len(){
+      assert_eq!(a_res[i],a_data[i],"{} != {} mismatch at {} ( addr {} in alloccator) ",a_res[i],a_data[i],i, i + a_start as usize);
+   }
+   println!("b: {} == {} ?",b_res.len(),b_data.len());
+   println!("c: {} == {} ?",c_res.len(),c_data.len());
+   assert_eq!(a_res,a_data);
+   assert_eq!(b_res,b_data);
+   assert_eq!(c_res,c_data);
+}
+

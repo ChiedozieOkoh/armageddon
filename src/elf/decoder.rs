@@ -302,9 +302,37 @@ pub enum LoadType{
 #[derive(Debug,PartialEq)]
 pub struct Section{
    pub name: String,
+   pub name_idx: u32,
    pub start: u32,
    pub len: u32,
    pub load: LoadType
+}
+
+pub fn load_sections(
+      reader: &mut BufReader<File>,
+      header: &ElfHeader,
+      sect_hdrs: &Vec<SectionHeader>,
+      sections: Vec<Section>
+   )->Result<Vec<(String, u32, Vec<u8>)>,ElfError>{
+   let mut loaded = Vec::new();
+   for hdr in sect_hdrs{
+      let nidx = to_native_endianness_32b(header, &hdr.name);
+      let load = sections.iter().position(|ld| ld.name_idx == nidx);
+      match load{
+         Some(ld) => {
+            if matches!(&sections[ld].load,LoadType::PROGBITS){
+               let section_size = to_native_endianness_32b(header, &hdr.section_size_in_bytes);
+               let offset = to_native_endianness_32b(header, &hdr.offset_of_entries_in_bytes);
+               let mut buffer = vec![0_u8;section_size as usize];
+               reader.seek(std::io::SeekFrom::Start(offset as u64))?;
+               reader.read_exact(&mut buffer)?;
+               loaded.push((sections[ld].name.clone(),sections[ld].start,buffer));
+            }
+         },
+         None => {},
+      }
+   }
+   Ok(loaded)
 }
 
 pub fn get_loadable_sections(
@@ -322,10 +350,12 @@ pub fn get_loadable_sections(
          let _type = to_native_endianness_32b(header, &hdr._type);
          let addr = to_native_endianness_32b(header, &hdr._addr_in_memory_img);
          let size = to_native_endianness_32b(header, &hdr.section_size_in_bytes);
+         let name_idx = to_native_endianness_32b(header, &hdr.name);
          if _type == SectionHeaderType::NOBITS as u32 {
             println!("{} section origin: {} len: {} type: NOBITS",name,addr,size);
             loadable_sections.push(Section{
                 name: name.clone(),
+                name_idx: name_idx,
                 start: addr,
                 len: size,
                 load: LoadType::NOBITS,
@@ -334,6 +364,7 @@ pub fn get_loadable_sections(
             println!("{} section origin: {} len: {} type: PROGBITS",name,addr,size);
             loadable_sections.push(Section{
                 name: name.clone(),
+                name_idx: name_idx,
                 start: addr,
                 len: size,
                 load: LoadType::PROGBITS,

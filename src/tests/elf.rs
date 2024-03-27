@@ -155,32 +155,22 @@ fn should_map_sections()->Result<(),std::io::Error>{
    let t = sects.iter().position(|ld| ld.name.eq(".text")).unwrap();
    let d = sects.iter().position(|ld| ld.name.eq(".data")).unwrap();
    let b = sects.iter().position(|ld| ld.name.eq(".bss")).unwrap();
-   assert_eq!(
-      sects[t],
-      Section{
-         name: String::from(".text"),
-         start: text_offset as u32,
-         len: 4,
-         load: LoadType::PROGBITS
-      });
 
-   assert_eq!(
-      sects[d],
-      Section{
-         name: String::from(".data"),
-         start: data_offset as u32,
-         len: 4 * 4,
-         load: LoadType::PROGBITS
-      });
+   assert_eq!(sects[t].name,String::from(".text"));
+   assert_eq!(sects[t].start,text_offset as u32);
+   assert_eq!(sects[t].len,4); // 2 * 16bit instructions = 4 bytes
+   assert_eq!(sects[t].load,LoadType::PROGBITS); // 2 * 16bit instructions = 4 bytes
 
-   assert_eq!(
-      sects[b],
-      Section{
-         name: String::from(".bss"),
-         start: bss_offset as u32,
-         len: 8,
-         load: LoadType::NOBITS
-      });
+   assert_eq!(sects[d].name,String::from(".data"));
+   assert_eq!(sects[d].start,data_offset as u32);
+   assert_eq!(sects[d].len,4 * 4); // 4 .4byte numbers
+   assert_eq!(sects[d].load,LoadType::PROGBITS); // 2 * 16bit instructions = 4 bytes
+
+   assert_eq!(sects[b].name,String::from(".bss"));
+   assert_eq!(sects[b].start,bss_offset as u32);
+   assert_eq!(sects[b].len,8); // 4 .4byte numbers
+   assert_eq!(sects[b].load,LoadType::NOBITS); // 2 * 16bit instructions = 4 bytes
+
    Ok(())
 }
 
