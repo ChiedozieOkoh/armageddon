@@ -3,12 +3,13 @@ use std::fs::File;
 use std::io::Write;
 use std::process::Command;
 use crate::asm::interpreter::SymbolTable;
+use crate::binutils::u32_to_arm_bytes;
 use crate::elf::decoder::{
    get_header,
    get_all_section_headers,
    is_text_section_hdr,
    SectionHeader,
-   read_text_section, is_symbol_table_section_hdr, get_section_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map,  get_text_section_symbols, get_entry_point_offset, LiteralPools, get_all_symbol_names, SymbolType, SymbolDefinition, get_section_names, get_loadable_sections, Section, LoadType
+   read_text_section, is_symbol_table_section_hdr, get_section_symbols, get_string_table_section_hdr, get_matching_symbol_names, build_symbol_byte_offset_map,  get_text_section_symbols, get_entry_point_offset, LiteralPools, get_all_symbol_names, SymbolType, SymbolDefinition, get_section_names, get_loadable_sections, Section, LoadType, load_sections
 };
 
 pub fn write_asm_make_elf(path: &str, data: &[u8])->Result<PathBuf, std::io::Error>{
@@ -170,6 +171,24 @@ fn should_map_sections()->Result<(),std::io::Error>{
    assert_eq!(sects[b].start,bss_offset as u32);
    assert_eq!(sects[b].len,8); // 4 .4byte numbers
    assert_eq!(sects[b].load,LoadType::NOBITS); // 2 * 16bit instructions = 4 bytes
+
+   let section_data = load_sections(&mut reader, &elf_header, &section_headers,sects).unwrap();
+
+   let t = section_data.iter().position(|(sn,_,_)| sn.eq(".text")).unwrap();
+   let d = section_data.iter().position(|(sn,_,_)| sn.eq(".data")).unwrap();
+
+   let (_,t_offset,t_data) = &section_data[t]; 
+   assert_eq!(*t_offset as usize,text_offset);
+   assert_eq!(t_data.len(),4);
+
+   let (_,d_offset,d_data) = &section_data[d];
+   assert_eq!(*d_offset as usize,data_offset);
+
+   let expected_data_section = vec![u32_to_arm_bytes(70),u32_to_arm_bytes(32),u32_to_arm_bytes(12),u32_to_arm_bytes(700)]
+      .into_iter()
+      .flatten()
+      .collect::<Vec<u8>>();
+   assert_eq!(d_data,&expected_data_section);
 
    Ok(())
 }

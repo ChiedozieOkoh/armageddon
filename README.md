@@ -107,3 +107,4 @@ If you encounter any bugs please open an issue :)
 - [x] support focus on code search results
 - [ ] disassemble `.text` and `.data` sections by default 
 - [ ] add command line option to force a section to be included in the disassembly
+- [ ] add option to allow to do reset without an explicit reset handler (i.e just jump to `entry_point`) 

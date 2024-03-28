@@ -45,16 +45,14 @@ fn gui_diasm(){
    let maybe_instructions  = load_instruction_opcodes(maybe_file);
    exit_on_err(&maybe_instructions);
 
-   let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
-   let disasm = disasm_text(&instructions, entry_point, &symbol_map);
+   let (disasm, entry_point, symbol_map, sys) = maybe_instructions.unwrap();
+   //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 
    for i in disasm.into_iter(){
       msg.push_str(&i);
       msg.push('\n');
    }
-   let mut sys = System::fill_with(&instructions);
    println!("sys memory image: 0 -> {} pages ",sys.alloc.pages());
-   sys.set_pc(entry_point & (!1)).unwrap();
    let flags = (sys,entry_point,symbol_map, msg);
    App::run(iced::Settings::with_flags(flags)).unwrap();
 }
@@ -72,8 +70,8 @@ fn cli_disasm(){
    let maybe_instructions  = load_instruction_opcodes(maybe_file);
    exit_on_err(&maybe_instructions);
 
-   let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
-   print_assembly(&instructions[..],entry_point, &symbol_map);
+   //let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
+   //print_assembly(&instructions[..],entry_point, &symbol_map);
 }
 /*fn assemble(path: &Path, asm: &[u8])->Result<Vec<u8>,ElfError>{
    write_asm(path,asm)?;
@@ -109,13 +107,15 @@ fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
 }
 */
 
-fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, Vec<SymbolDefinition>),ElfError>{
+fn load_instruction_opcodes(file: &Path)->Result<(Vec<String>, usize, Vec<SymbolDefinition>, System),ElfError>{
    use crate::elf::decoder::{
       SectionHeader,
       get_header,
       get_all_section_headers,
       is_text_section_hdr,
-      read_text_section
+      read_text_section,
+      get_loadable_sections,
+      load_sections
    };
    let (elf_header,mut reader) = get_header(file)?;
 
@@ -147,9 +147,20 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<u8>, usize, Vec<SymbolDefi
    //let names = get_matching_symbol_names(&mut reader, &elf_header, &text_section_symbols, &str_table_hdr).unwrap();
    //let text_sect_offset_map = build_symbol_byte_offset_map(&elf_header, names, &sym_entries);
    let symbols = get_all_symbol_names(&mut reader, &elf_header, &sym_entries, str_table_hdr).unwrap();
+
+   let loadable = get_loadable_sections(&mut reader, &elf_header,&section_headers)?;
+
+   let section_data = load_sections(&mut reader, &elf_header, &section_headers, loadable)?;
+
+   let t = section_data.iter().position(|(name,_,_)|name.eq(".text")).expect("ELF file did not specify a .text section ???");
+
+   let (_,text_offset,text_data) = &section_data[t];
+   let disasm = disasm_text(text_data, *text_offset as usize, &symbols);
    let entry_point = get_entry_point_offset(&elf_header);
 
-   Ok((text_section, entry_point, symbols))
+   let mut sys = System::with_sections(section_data);
+   sys.set_pc(entry_point & (!1));
+   Ok((disasm, entry_point, symbols, sys))
 }
 
 fn exit_on_err<T>(maybe_err: &Result<T,ElfError>){

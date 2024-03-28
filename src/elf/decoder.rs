@@ -352,7 +352,7 @@ pub fn get_loadable_sections(
          let size = to_native_endianness_32b(header, &hdr.section_size_in_bytes);
          let name_idx = to_native_endianness_32b(header, &hdr.name);
          if _type == SectionHeaderType::NOBITS as u32 {
-            println!("{} section origin: {} len: {} type: NOBITS",name,addr,size);
+            println!("{} section origin: {:#x} len: {} type: NOBITS",name,addr,size);
             loadable_sections.push(Section{
                 name: name.clone(),
                 name_idx: name_idx,
@@ -361,7 +361,7 @@ pub fn get_loadable_sections(
                 load: LoadType::NOBITS,
             });
          }else if _type == SectionHeaderType::PROGBITS as u32{
-            println!("{} section origin: {} len: {} type: PROGBITS",name,addr,size);
+            println!("{} section origin: {:#x} len: {} type: PROGBITS",name,addr,size);
             loadable_sections.push(Section{
                 name: name.clone(),
                 name_idx: name_idx,

@@ -157,9 +157,10 @@ pub struct RawData{
 }
 
 //TODO refactor so that lambdas don't needlessly allocate new strings
-pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<SymbolDefinition>)->Vec<String>{
+pub fn disasm_text(bytes: &[u8], section_offset: usize, symbols: &Vec<SymbolDefinition>)->Vec<String>{
    let src_code = disassemble(
       bytes,
+      section_offset,
       symbols,
       |byte_offset,code,encoded_16b,label|{
          let maybe_args = get_operands(&code, encoded_16b);
@@ -221,9 +222,10 @@ pub fn disasm_text(bytes: &[u8], entry_point: usize, symbols: &Vec<SymbolDefinit
    src_code
 }
 
-pub fn print_assembly(bytes: &[u8],entry_point: usize, symbols: &Vec<SymbolDefinition>){
+pub fn print_assembly(bytes: &[u8],section_offset: usize, symbols: &Vec<SymbolDefinition>){
    let src_code = disassemble(
       bytes,
+      section_offset,
       symbols,
       |byte_offset,code,encoded_16b,label|{
          let maybe_args = get_operands(&code, encoded_16b);
@@ -292,7 +294,7 @@ T,
 F: Fn(usize,Opcode,[u8;2],Option<&String>)->T,
 G: Fn(usize,Opcode,[u8;4],Option<&String>)->T,
 P: FnMut(usize,&[u8],&mut SymbolTable)->T,
-> (bytes: &[u8], symbols: &Vec<SymbolDefinition>, operation_16b: F,operation_32b: G, mut pool_handler: P)->Vec<T>{
+> (bytes: &[u8],section_offset: usize, symbols: &Vec<SymbolDefinition>, operation_16b: F,operation_32b: G, mut pool_handler: P)->Vec<T>{
    let mut i: usize = 0;
    let mut result: Vec<T> = Vec::new();
    let pools = LiteralPools::create_from_list(symbols);
@@ -301,16 +303,19 @@ P: FnMut(usize,&[u8],&mut SymbolTable)->T,
    println!("pool @ 34 {:?}",pools.get_pool_at(34));
 
    while i < bytes.len(){
+      let abs_position = i + section_offset;
       match pools.get_pool_at(i){
          Some(pool) => {
+            let relative_start = pool.start - section_offset; 
             let pl_bin = match pool.end {
                 Some(end) => { 
-                   let last = std::cmp::min(end, bytes.len());
+                   let relative_end = end - section_offset;
+                   let last = std::cmp::min(relative_end, bytes.len());
                    &bytes[pool.start .. last] 
                 },
-                None => {&bytes[pool.start ..]},
+                None => {&bytes[relative_start ..]},
             };
-            let out = pool_handler(i,pl_bin,&mut sym_table);
+            let out = pool_handler(abs_position,pl_bin,&mut sym_table);
             result.push(out);
             i += pl_bin.len();
          },
@@ -320,13 +325,13 @@ P: FnMut(usize,&[u8],&mut SymbolTable)->T,
             match instruction_size(hw){
                InstructionSize::B16 => {
                   let thumb_instruction = Opcode::from(hw);
-                  result.push(operation_16b(i,thumb_instruction,hw,maybe_label));
+                  result.push(operation_16b(abs_position,thumb_instruction,hw,maybe_label));
                   i += 2;
                },
                InstructionSize::B32 => {
                   let word: [u8;4] = bytes[i..i+4].try_into().expect("should be 4byte aligned");
                   let instruction_32bit = Opcode::from(word);
-                  result.push(operation_32b(i,instruction_32bit,word,maybe_label));
+                  result.push(operation_32b(abs_position,instruction_32bit,word,maybe_label));
                   i += 4;
                }
             }
