@@ -1122,7 +1122,7 @@ pub enum PaneType{
    Trace
 }
 
-fn parse_hex(hex: &str)->Option<u32>{
+pub fn parse_hex(hex: &str)->Option<u32>{
    if hex.starts_with("0x"){
       match hex.trim().strip_prefix("0x"){
          Some(h) => {

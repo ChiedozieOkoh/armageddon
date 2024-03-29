@@ -31,8 +31,13 @@ pub struct System{
    pub trace_enabled: bool,
    pub trace: String,
    pub alloc: BlockAllocator,
+   pub reset_cfg: Option<ResetCfg>
 }
 
+pub struct ResetCfg{
+   pub sp_reset_val: u32,
+   pub reset_hander_ptr: u32
+}
 #[derive(Clone,Debug)]
 pub enum Mode{
    Thread,
@@ -217,6 +222,7 @@ impl System{
          trace_enabled: false,
          trace: String::new(),
          alloc: BlockAllocator::create(),
+         reset_cfg: None,
       }
    }
 
@@ -236,6 +242,7 @@ impl System{
          trace_enabled: false,
          trace: String::new(),
          alloc: BlockAllocator::fill(text),
+         reset_cfg: None,
       }
    }
 
@@ -273,6 +280,7 @@ impl System{
          trace_enabled: false,
          trace: String::new(),
          alloc: BlockAllocator::init(memory),
+         reset_cfg: None
       }
    }
 
@@ -1567,8 +1575,10 @@ impl System{
       self.scs = SystemControlSpace::reset();
       self.active_exceptions = [ExceptionStatus::Inactive;48];
       self.event_register = false;
-      let main_sp_reset_val: u32 = from_arm_bytes(load_memory(&self, self.scs.vtor).unwrap());
-      let reset_handler_ptr: u32 = from_arm_bytes(load_memory(&self,self.scs.vtor + 4).unwrap()) & (!1);
+      let (main_sp_reset_val,reset_handler_ptr) : (u32,u32) = match self.reset_cfg{
+        Some(ref cfg) => (cfg.sp_reset_val,cfg.reset_hander_ptr),
+        None => (from_arm_bytes(load_memory(&self, self.scs.vtor).unwrap()),from_arm_bytes(load_memory(&self,self.scs.vtor + 4).unwrap()) & (!1)),
+      };
       self.registers.sp_main = main_sp_reset_val;
       self.registers.pc = reset_handler_ptr as usize;
       if self.trace_enabled{

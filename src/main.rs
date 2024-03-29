@@ -9,14 +9,23 @@ mod ui;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use elf::decoder::{ElfError, SymbolDefinition};
 use iced::Application;
+use ui::parse_hex;
 
 use crate::asm::interpreter::{print_assembly, disasm_text};
 use crate::elf::decoder::{get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_entry_point_offset, get_all_symbol_names};
 use crate::system::System;
 use crate::ui::App;
+
+struct Args{
+   pub elf: PathBuf,
+   pub sp_reset_val: Option<u32>
+}
+
+#[derive(Debug)]
+struct ParseErr(&'static str);
 
 //TODO diassemble entire binary not just text section, load other segments into system
 fn main() {
@@ -24,50 +33,85 @@ fn main() {
    //cli_disasm();
 }
 
-fn print_help(){
-   println!("Usage: armageddon <FILE> <OPTIONS>");
-   println!("starts the simulator with the ELF file program loaded");
-   println!("Option list");
-   let padding = 10;
-   println!("-h, --help{:>padding$}","show this message");
-}
+const HELP_MSG: &'static str =  concat!(
+   "Usage: armageddon <FILE> <OPTIONS>\n",
+   "-h,--help               show this message\n",
+   "\n",
+   "--sp-reset-val=<HEX>    specify the stack pointer value asigned during a reset.\n",
+   "                        when this value is set via the CLI the entry_point of the ELF\n",
+   "                        will be assumed to point to the reset routine handler\n" 
+);
 
 fn gui_diasm(){
    let args: Vec<String> = std::env::args().collect();
-   if args.len() != 2{
-      dbg_ln!("you must provide one elf file");
-      print_help();
-      std::process::exit(-1);
-   }
 
    dbg_ln!("DEBUG ENABLED");
-   let maybe_file = Path::new(&args[1]);
-   let maybe_instructions  = load_instruction_opcodes(maybe_file);
+   //let maybe_file = Path::new(&args[1]);
+   if args.contains(&String::from("-h")) | args.contains(&String::from("--help")){
+      println!("{}",HELP_MSG);
+      std::process::exit(0);
+   }
+
+   let cli_arg = parse_args(args).unwrap(); 
+   let maybe_instructions  = load_instruction_opcodes(&cli_arg.elf);
    exit_on_err(&maybe_instructions);
 
-   let (disasm, entry_point, symbol_map, sys) = maybe_instructions.unwrap();
+   let (disasm, entry_point, symbol_map, mut sys) = maybe_instructions.unwrap();
+   println!("sys memory image: 0 -> {} pages ",sys.alloc.pages());
+   if cli_arg.sp_reset_val.is_some(){
+      println!("overriding reset handler ptr and sp_reset_val");
+      sys.reset_cfg = Some(system::ResetCfg {
+         sp_reset_val: cli_arg.sp_reset_val.unwrap(), 
+         reset_hander_ptr: entry_point as u32
+      });
+   }
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 
    for i in disasm.into_iter(){
       msg.push_str(&i);
       msg.push('\n');
    }
-   println!("sys memory image: 0 -> {} pages ",sys.alloc.pages());
    let flags = (sys,entry_point,symbol_map, msg);
    App::run(iced::Settings::with_flags(flags)).unwrap();
 }
 
-fn cli_disasm(){
-   let args: Vec<String> = std::env::args().collect();
-   if args.len() != 2{
+
+fn parse_args(args: Vec<String>)->Result<Args,ParseErr>{
+   if args.len()  < 2{
       dbg_ln!("you must provide one elf file");
-      print_help();
-      std::process::exit(-1);
+      return Err(ParseErr("you must provide one elf file"));
    }
 
+   let maybe_file = PathBuf::from(&args[1]);
+   let maybe_reset_val = args.iter().position(|a| a.starts_with("--sp-reset-val="));
+   let mut reset_val = None;
+   match maybe_reset_val{
+      Some(i) => {
+         match &args[i].strip_prefix("--sp-reset-val="){
+            Some(input) => match parse_hex(*input){
+                Some(v) => {reset_val = Some(v);},
+                None => {return Err(ParseErr("invalid input for --sp-reset-val"));},
+            },
+            None => {return Err(ParseErr("missing value for --sp-reset-val"));},
+        }
+      },
+      None => {},
+   }
+
+   Ok(Args { elf: maybe_file, sp_reset_val: reset_val })
+}
+
+fn cli_disasm(){
+   let args: Vec<String> = std::env::args().collect();
+
    dbg_ln!("DEBUG ENABLED");
-   let maybe_file = Path::new(&args[1]);
-   let maybe_instructions  = load_instruction_opcodes(maybe_file);
+   if args.contains(&String::from("-h")) | args.contains(&String::from("--help")){
+      println!("{}",HELP_MSG);
+      std::process::exit(0);
+   }
+
+   let cli_arg = parse_args(args).unwrap(); 
+   let maybe_instructions  = load_instruction_opcodes(&cli_arg.elf);
    exit_on_err(&maybe_instructions);
 
    //let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
@@ -159,7 +203,7 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<String>, usize, Vec<Symbol
    let entry_point = get_entry_point_offset(&elf_header);
 
    let mut sys = System::with_sections(section_data);
-   sys.set_pc(entry_point & (!1));
+   sys.set_pc(entry_point & (!1)).unwrap();
    Ok((disasm, entry_point, symbols, sys))
 }
 
