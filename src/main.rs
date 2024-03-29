@@ -62,7 +62,7 @@ fn gui_diasm(){
       println!("overriding reset handler ptr and sp_reset_val");
       sys.reset_cfg = Some(system::ResetCfg {
          sp_reset_val: cli_arg.sp_reset_val.unwrap(), 
-         reset_hander_ptr: entry_point as u32
+         reset_hander_ptr: (entry_point & (!1)) as u32
       });
    }
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
