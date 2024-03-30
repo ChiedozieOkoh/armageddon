@@ -21,11 +21,12 @@ use crate::ui::App;
 
 struct Args{
    pub elf: PathBuf,
-   pub sp_reset_val: Option<u32>
+   pub sp_reset_val: Option<u32>,
+   pub vtor_override: Option<u32>
 }
 
 #[derive(Debug)]
-struct ParseErr(&'static str);
+struct ParseErr(String);
 
 //TODO diassemble entire binary not just text section, load other segments into system
 fn main() {
@@ -65,6 +66,11 @@ fn gui_diasm(){
          reset_hander_ptr: (entry_point & (!1)) as u32
       });
    }
+
+   if cli_arg.vtor_override.is_some(){
+      println!("overriding default VTOR value");
+      sys.set_vtor(cli_arg.vtor_override.unwrap());
+   }
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 
    for i in disasm.into_iter(){
@@ -76,10 +82,28 @@ fn gui_diasm(){
 }
 
 
+fn get_optional_hex(args: &Vec<String>,name: &str)->Result<Option<u32>,ParseErr>{
+   let maybe_val = args.iter().position(|a| a.starts_with(name));
+   let mut val = None;
+   match maybe_val{
+      Some(i) => {
+         match &args[i].strip_prefix(name){
+            Some(input) => match parse_hex(*input){
+                Some(v) => {val = Some(v);},
+                None => {return Err(ParseErr(format!("invalid input for {}",name)));},
+            },
+            None => {return Err(ParseErr(format!("missing value for {}",name)));},
+        }
+      },
+      None => {},
+   }
+   Ok(val)
+}
+
 fn parse_args(args: Vec<String>)->Result<Args,ParseErr>{
    if args.len()  < 2{
       dbg_ln!("you must provide one elf file");
-      return Err(ParseErr("you must provide one elf file"));
+      return Err(ParseErr(String::from("you must provide one elf file")));
    }
 
    let maybe_file = PathBuf::from(&args[1]);
@@ -90,15 +114,17 @@ fn parse_args(args: Vec<String>)->Result<Args,ParseErr>{
          match &args[i].strip_prefix("--sp-reset-val="){
             Some(input) => match parse_hex(*input){
                 Some(v) => {reset_val = Some(v);},
-                None => {return Err(ParseErr("invalid input for --sp-reset-val"));},
+                None => {return Err(ParseErr(String::from("invalid input for --sp-reset-val")));},
             },
-            None => {return Err(ParseErr("missing value for --sp-reset-val"));},
+            None => {return Err(ParseErr(String::from("missing value for --sp-reset-val")));},
         }
       },
       None => {},
    }
 
-   Ok(Args { elf: maybe_file, sp_reset_val: reset_val })
+   let maybe_vtor = get_optional_hex(&args, "--vtor=")?;
+
+   Ok(Args { elf: maybe_file, sp_reset_val: reset_val, vtor_override: maybe_vtor })
 }
 
 fn cli_disasm(){
@@ -156,8 +182,6 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<String>, usize, Vec<Symbol
       SectionHeader,
       get_header,
       get_all_section_headers,
-      is_text_section_hdr,
-      read_text_section,
       get_loadable_sections,
       load_sections
    };
@@ -166,16 +190,6 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<String>, usize, Vec<Symbol
    let section_headers = get_all_section_headers(&mut reader, &elf_header)?;
    dbg_ln!("sect_hdrs {:?}",section_headers);
    assert!(!section_headers.is_empty());
-
-   let text_sect_hdr: Vec<&SectionHeader> = section_headers.iter()
-      .filter(|hdr| is_text_section_hdr(&elf_header, hdr))
-      .collect();
-
-   dbg_ln!("header {:?}",text_sect_hdr);
-   assert_eq!(text_sect_hdr.len(),1);
-   let sect_hdr = &text_sect_hdr[0];
-
-   let text_section = read_text_section(&mut reader, &elf_header, sect_hdr)?;
 
    let strtab_idx = get_string_table_section_hdr(&elf_header, &section_headers).unwrap();
    let str_table_hdr = &section_headers[strtab_idx];

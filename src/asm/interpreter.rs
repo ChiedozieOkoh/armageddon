@@ -100,7 +100,7 @@ pub fn print_instruction(addr: u32,code: &Opcode, operands: &Option<Operands>)->
             format!("{}{:#010x}:{}{} {}",INDENT,addr,INDENT,code,pretty_print(&args))
          }
       },
-      None => format!("{}{}",INDENT,code)
+      None => format!("{}{:#010x}:{}{}",INDENT,addr,INDENT,code)
    };
 
    instruction
@@ -126,7 +126,7 @@ fn symbol_aware_disassemble(
                   format!("{}{:#010x}:{}{} {}",INDENT,byte_offset,INDENT,code,pretty_print(&args))
                }
             },
-            None => format!("{}{}",INDENT,code)
+            None => format!("{}{:#010x}:{}{}",INDENT,byte_offset,INDENT,code)
          };
          line.push_str(&instruction);
          line
@@ -299,19 +299,22 @@ P: FnMut(usize,&[u8],&mut SymbolTable)->T,
    let mut result: Vec<T> = Vec::new();
    let pools = LiteralPools::create_from_list(symbols);
    let mut sym_table = SymbolTable::create(symbols);
-   println!("pools {:?}",pools);
-   println!("pool @ 34 {:?}",pools.get_pool_at(34));
+   //println!("pools {:?}",pools);
+   //println!("pool @ 0x10000264 ({})_base10 {:?}",0x10000264,pools.get_pool_at(0x10000264));
+   //println!("pool @ 0x10000266 ({})_base10 {:?}",0x10000266,pools.get_pool_at(0x10000266));
+   //println!("pool @ 0x10000268 ({})_base10 {:?}",0x10000268,pools.get_pool_at(0x10000268));
 
+   println!("symbols: {:?}",sym_table.symbols);
    while i < bytes.len(){
       let abs_position = i + section_offset;
-      match pools.get_pool_at(i){
+      match pools.get_pool_at(abs_position){
          Some(pool) => {
             let relative_start = pool.start - section_offset; 
             let pl_bin = match pool.end {
                 Some(end) => { 
                    let relative_end = end - section_offset;
                    let last = std::cmp::min(relative_end, bytes.len());
-                   &bytes[pool.start .. last] 
+                   &bytes[relative_start .. last] 
                 },
                 None => {&bytes[relative_start ..]},
             };
@@ -321,7 +324,8 @@ P: FnMut(usize,&[u8],&mut SymbolTable)->T,
          },
          None => {
             let hw: [u8;2] = bytes[i..i+2].try_into().expect("should be 2byte aligned"); 
-            let maybe_label = sym_table.lookup(i);
+            let maybe_label = sym_table.lookup(abs_position);
+            dbg_ln!("decoding address = {:#x} value = {:#x} {:#x}",abs_position,hw[0],hw[1]);
             match instruction_size(hw){
                InstructionSize::B16 => {
                   let thumb_instruction = Opcode::from(hw);

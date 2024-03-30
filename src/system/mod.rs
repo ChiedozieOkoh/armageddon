@@ -31,7 +31,8 @@ pub struct System{
    pub trace_enabled: bool,
    pub trace: String,
    pub alloc: BlockAllocator,
-   pub reset_cfg: Option<ResetCfg>
+   pub reset_cfg: Option<ResetCfg>,
+   pub vtor_override: Option<u32>
 }
 
 pub struct ResetCfg{
@@ -223,6 +224,7 @@ impl System{
          trace: String::new(),
          alloc: BlockAllocator::create(),
          reset_cfg: None,
+         vtor_override: None,
       }
    }
 
@@ -243,6 +245,7 @@ impl System{
          trace: String::new(),
          alloc: BlockAllocator::fill(text),
          reset_cfg: None,
+         vtor_override: None,
       }
    }
 
@@ -280,7 +283,8 @@ impl System{
          trace_enabled: false,
          trace: String::new(),
          alloc: BlockAllocator::init(memory),
-         reset_cfg: None
+         reset_cfg: None,
+         vtor_override: None,
       }
    }
 
@@ -384,7 +388,7 @@ impl System{
    }
 
    pub fn read_pc_word_aligned(&self)->u32{
-      println!("(wrd algin : {} + {} = {} ) & {:04b}",
+      dbg_ln!("(wrd align : {} + {} = {} ) & {:04b}",
                self.registers.pc,4,
                ((self.registers.pc + 4 ) as u32) & 0xFFFFFFFC,0xFFFFFFFC_u32);
       return ((self.registers.pc + 4) as u32 ) & 0xFFFFFFFC;
@@ -803,6 +807,22 @@ impl System{
                   self.registers.generic[dest.0 as usize] = sum;
                   return Ok(instr_size.in_bytes() as i32);
                },
+
+               Opcode::_16Bit(B16::ADR)=>{
+                  let (dest,imm8) = unpack_operands!(
+                     operands,
+                     Operands::ADR,
+                     a,b
+                  );
+                  
+                  let base = self.read_pc_word_aligned();
+
+                  let offset: u32 = (imm8.0 as u32) << 2;
+                  let v = base + offset;
+
+                  self.registers.generic[dest.0 as usize] = v;
+                  return Ok(instr_size.in_bytes() as i32);
+               }
 
                Opcode::_16Bit(B16::ASRS_Imm5) =>{
                   let (dest,src,imm5) = unpack_operands!(
@@ -1497,7 +1517,7 @@ impl System{
                      return Ok(0_i32);
                   }
                }
-               _ => todo!()
+               _ => todo!("{:?} has not been implemented yet",code)
             } 
          },
          InstructionSize::B32 => {
@@ -1540,7 +1560,7 @@ impl System{
                         }
                         self.control_register = into_arm_bytes(cr);
                      },
-                     _ => todo!()
+                     _ => todo!("MSR for {:?} has not been implemented yet",special)
                   }
 
                   return Ok(instr_size.in_bytes() as i32);
@@ -1561,10 +1581,15 @@ impl System{
                   println!("executing {}, {}",instr_32b,offset);
                   return Ok(offset);
                },
-               _ => unreachable!()
+               _ => todo!("{:?} has not been implemented yet",instr_32b)
             }
          }
       }
+   }
+
+   pub fn set_vtor(&mut self, v: u32){
+      self.vtor_override = Some(v);
+      self.scs.vtor = v;
    }
 
    pub fn reset(&mut self){
@@ -1575,6 +1600,9 @@ impl System{
       self.scs = SystemControlSpace::reset();
       self.active_exceptions = [ExceptionStatus::Inactive;48];
       self.event_register = false;
+      if self.vtor_override.is_some(){
+         self.scs.vtor = self.vtor_override.unwrap();
+      }
       let (main_sp_reset_val,reset_handler_ptr) : (u32,u32) = match self.reset_cfg{
         Some(ref cfg) => (cfg.sp_reset_val,cfg.reset_hander_ptr),
         None => (from_arm_bytes(load_memory(&self, self.scs.vtor).unwrap()),from_arm_bytes(load_memory(&self,self.scs.vtor + 4).unwrap()) & (!1)),

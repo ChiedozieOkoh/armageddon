@@ -421,9 +421,11 @@ fn pane_render<'a>(
                un_highlighted.clear();
             }else{
                if !line.trim().is_empty(){
+                  dbg_ln!("asm line ({})",line);
                   let offset = line.split(":").next();
                   match offset{
                      Some(address) => {
+                        dbg_ln!("parsing hex ({})",address);
                         let add_v = u32::from_str_radix(
                            address.trim().trim_start_matches("0x").trim(),
                            16
@@ -830,19 +832,23 @@ impl Application for App{
 
          Event::Ui(Gui::FocusNextSearchResult)=>{
             let _ = self.searchbar.as_mut().unwrap().focus_next();
-            let position = self.searchbar.as_ref()
+            let maybe_position = self.searchbar.as_ref()
                .unwrap()
-               .get_focused_search_result()
-               .unwrap();
+               .get_focused_search_result();
 
-            let total_lines = self.disasm.lines().count();
-            let ratio = position.line_number as f32 / total_lines as f32;
-            dbg_ln!("estimated ratio {} / {} =  {}",
-                    position.line_number,
-                    total_lines,
-                    ratio
-                   );
-            cmd = iced::widget::scrollable::snap_to(self.diasm_win_id.clone(), scrollable::RelativeOffset { x: 0.0, y: ratio });
+            match maybe_position{
+                Some(position) => {
+                   let total_lines = self.disasm.lines().count();
+                   let ratio = position.line_number as f32 / total_lines as f32;
+                   dbg_ln!("estimated ratio {} / {} =  {}",
+                           position.line_number,
+                           total_lines,
+                           ratio
+                          );
+                   cmd = iced::widget::scrollable::snap_to(self.diasm_win_id.clone(), scrollable::RelativeOffset { x: 0.0, y: ratio });
+                },
+                None => println!("no matches found"),
+            }
          },
 
          Event::Ui(Gui::SubmitSearch)=>{
