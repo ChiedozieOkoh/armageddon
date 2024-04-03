@@ -14,6 +14,7 @@ pub mod searchbar;
 pub struct App{
    _state: pane_grid::State<PaneType>,
    n_panes: usize,
+   focused_pane: pane_grid::Pane,
    diasm_win_id: iced::widget::scrollable::Id,
    entry_point: usize,
    pub disasm: String,
@@ -677,12 +678,22 @@ fn brkpt_theme(theme: &Theme)->container::Appearance{
    }
 }
 
-fn focused_pane(theme: &Theme)->container::Appearance{
+fn normal_pane(theme: &Theme)->container::Appearance{
    let palette = theme.extended_palette();
    container::Appearance{
       background: Some(palette.background.weak.color.into()),
       border_width: 2.0,
       border_color: palette.background.strong.color,
+      ..Default::default()
+   }
+}
+
+fn focused_pane(theme: &Theme)->container::Appearance{
+   let palette = theme.extended_palette();
+   container::Appearance{
+      background: Some(palette.background.weak.color.into()),
+      border_width: 2.0,
+      border_color: iced::Color{r: 1.0, g: 0.0, b: 0.0, a: 1.0},
       ..Default::default()
    }
 }
@@ -694,7 +705,7 @@ impl Application for App{
    type Executor = executor::Default;
 
    fn new(args: Self::Flags)->(Self,Command<Event>){
-      let (state,_) = pane_grid::State::new(PaneType::Disassembler);
+      let (state,def) = pane_grid::State::new(PaneType::Disassembler);
       
       let (mut sys,entry_point, symbols, disassembly) = args;
       sys.trace_enabled = true;
@@ -703,6 +714,7 @@ impl Application for App{
       let disasm_id = iced::widget::scrollable::Id::unique();
       (Self{
          _state: state,
+         focused_pane: def,
          n_panes: 1,
          diasm_win_id: disasm_id,
          sync_sys: sync_sys_arc,
@@ -860,8 +872,23 @@ impl Application for App{
          },
 
          Event::Ui(Gui::ClosePane(pane)) => {
+            if pane.eq(&self.focused_pane){
+               if let Some(other_pane) = self._state.adjacent(&pane, pane_grid::Direction::Up){
+                  self.focused_pane = other_pane;
+               }else if let Some(other_pane) = self._state.adjacent(&pane, pane_grid::Direction::Left){
+                  self.focused_pane = other_pane;
+               }else if let Some(other_pane) = self._state.adjacent(&pane, pane_grid::Direction::Down){
+                  self.focused_pane = other_pane;
+               }else if let Some(other_pane) = self._state.adjacent(&pane, pane_grid::Direction::Right){
+                  self.focused_pane = other_pane;
+               }
+            }
             self._state.close(&pane);
             self.n_panes -= 1;
+         },
+
+         Event::Ui(Gui::FocusPane(pane))=>{
+            self.focused_pane = pane;
          },
 
          Event::Ui(Gui::OpenSearchBar)=>{ self.searchbar = Some(SearchBar::create()); },
@@ -1153,21 +1180,30 @@ impl Application for App{
     }
 
    fn view(&self) -> iced::Element<'_, Self::Message, iced::Renderer> {
+      let pane_buttons = pane_cmds(self.n_panes,self.focused_pane.clone());
       let layout = PaneGrid::new(&self._state, |id, pane, _maximised|{
-         let title_bar = pane_grid::TitleBar::new("Armageddon").controls(pane_cmds(self.n_panes,id)).padding(10).style(focused_pane);
+         let is_focused = id == self.focused_pane;
+         let title_bar = pane_grid::TitleBar::new("Armageddon").padding(10).style(if is_focused{focused_pane}else{normal_pane});
          pane_grid::Content::new(
             pane_render(&self,pane)
          ).title_bar(title_bar)
-      }.style(focused_pane))
-      .on_resize(10,|e| Event::Ui(Gui::ResizePane(e)));
+      }.style(normal_pane))
+      .on_resize(10,|e| Event::Ui(Gui::ResizePane(e)))
+      .on_click(|p| Event::Ui(Gui::FocusPane(p)));
+
       if self.searchbar.is_some(){
          column![
             user_cmds(&self.bkpt_input),
+            pane_buttons,
             searchbar(&self.searchbar.as_ref().unwrap()),
             layout
          ].into()
       }else{
-         column![user_cmds(&self.bkpt_input),layout].into()
+         column![
+            user_cmds(&self.bkpt_input),
+            pane_buttons,
+            layout
+         ].into()
       }
       //layout.into()
     }
@@ -1207,6 +1243,7 @@ pub enum Debug{
 pub enum Gui{
    SplitPane(pane_grid::Pane,PaneType,pane_grid::Axis),
    ResizePane(pane_grid::ResizeEvent),
+   FocusPane(pane_grid::Pane),
    ClosePane(pane_grid::Pane),
    Exp(Explorer),
    SetBkptInput(String),
