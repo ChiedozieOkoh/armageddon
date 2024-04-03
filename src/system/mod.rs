@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::asm::interpreter::print_instruction;
 use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
-use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32};
+use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32, from_arm_bytes_16b};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
 use crate::dbg_ln;
@@ -401,6 +401,12 @@ impl System{
       return Ok(());
    }
 
+   pub fn alu_pc_offset(&self, address: u32)->i32{
+      let non_interworking = address & !1;
+      let offset = non_interworking as i32 - (self.registers.pc & 0xFFFFFFFE) as i32;
+      return offset;
+   }
+
    fn bx_interworking_pc_offset(&mut self, addr: u32)->Result<i32, ArmException>{
       if (addr & 0xF0000000 == 0xF0000000) && matches!(self.mode, Mode::Handler){
          match self.exception_return(addr){
@@ -438,6 +444,22 @@ impl System{
       }
    }
 
+   fn blx_interworking_offset(&mut self, addr: u32)->Result<i32,ArmException>{
+      let bit = (addr & 0x1) != 0; 
+      self.set_epsr_t_bit(bit);
+      if bit == false{
+         return Err(
+            ArmException::HardFault(
+               format!(
+                  "EPSR.T bit set to 0, addr {} is not interworking but should be",
+                  addr
+            ))
+         );
+      }
+
+      return Ok(((addr & 0xFFFFFFFE_u32) as i32) - (self.registers.pc as i32));
+   }
+
    fn in_privileged_mode(&self)->bool{
       match self.mode{
          Mode::Handler => {
@@ -470,6 +492,14 @@ impl System{
 
    pub fn set_exc_pending(&mut self, exc: ArmException){
       self.active_exceptions[exc.number() as usize] = ExceptionStatus::Pending;
+      match exc{
+         ArmException::HardFault(msg) => {
+            if !msg.trim().is_empty(){
+               println!("HARDFAULT PENDING: {}",msg);
+            }
+         },
+         _ => {}
+      }
    }
 
    pub fn check_for_exceptions(&mut self)->Option<u32>{
@@ -792,6 +822,25 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::ADDS_REG_T2)=>{
+                  //NOTE this encoded should not update the apsr register
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let d = self.read_any_register(dest.0);
+                  let s = self.read_any_register(src.0);
+                  let (sum,_) = add_immediate(d,s);
+                  if dest.0 == asm::PROGRAM_COUNTER{
+                     return Ok(self.alu_pc_offset(sum));
+                  }else{
+                     self.do_move(dest.0 as usize, sum)?;
+                     return Ok(instr_size.in_bytes() as i32);
+                  }
+               }
+
                Opcode::_16Bit(B16::ADD_REG_SP_IMM8) =>{
                   let (dest,imm) = unpack_operands!(
                      operands,
@@ -955,7 +1004,7 @@ impl System{
                   if register.0 == PROGRAM_COUNTER{
                      println!("WARN: reading from PC register for BLX is unpredictable undefined behaviour");
                   }
-                  return self.bx_interworking_pc_offset(branch_target);
+                  return self.blx_interworking_offset(branch_target);
                },
 
                Opcode::_16Bit(B16::BIT_CLEAR_REGISTER)=>{
@@ -1135,6 +1184,7 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               //TODO handle cases where move writes to SP, LR or PC
                Opcode::_16Bit(B16::MOV_Imm8)=> {
                   let (dest, imm8) = unpack_operands!(
                      operands,
@@ -1142,7 +1192,7 @@ impl System{
                      a,i
                   );
                   println!("opr: {},{}",dest,imm8);
-                  self.do_move(dest.0 as usize, imm8.0);
+                  self.do_move(dest.0 as usize, imm8.0)?;
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1152,9 +1202,14 @@ impl System{
                      Operands::MOV_REG,
                      a,b
                   );
-                  let v = self.registers.generic[src.0 as usize];
-                  self.do_move(dest.0 as usize, v);
-                  return Ok(instr_size.in_bytes() as i32);
+                  //let v = self.registers.generic[src.0 as usize];
+                  let v = self.read_any_register(src.0);
+                  if dest.0 == asm::PROGRAM_COUNTER{
+                     return Ok(self.alu_pc_offset(v));
+                  }else{
+                     self.do_move(dest.0 as usize, v)?;
+                     return Ok(instr_size.in_bytes() as i32);
+                  }
                },
 
                Opcode::_16Bit(B16::MOV_REGS_T2)=>{
@@ -1165,7 +1220,7 @@ impl System{
                   );
 
                   let v = self.registers.generic[src.0 as usize];
-                  self.do_move(dest.0 as usize, v);
+                  self.do_move(dest.0 as usize, v)?;
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1177,7 +1232,7 @@ impl System{
                   );
 
                   let v = !self.registers.generic[src.0 as usize];
-                  self.do_move(dest.0 as usize, v);
+                  self.do_move(dest.0 as usize, v)?;
                   return Ok(instr_size.in_bytes()as i32);
                },
 
@@ -1227,7 +1282,21 @@ impl System{
                   let value: [u8;4] = load_memory(&self, addr)?;
                   self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
                   return Ok(instr_size.in_bytes() as i32);
-               }
+               },
+
+               Opcode::_16Bit(B16::LDRH_Imm5)=>{
+                  let (dest,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::LDR_Imm5,
+                     a,b,c
+                  );
+
+                  let addr = self.registers.generic[base.0 as usize] + offset.0;
+                  let hw_bytes: [u8;2] = load_memory(&self, addr)?;
+                  let hw = from_arm_bytes_16b(hw_bytes);
+                  self.registers.generic[dest.0 as usize] = hw as u32;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
 
                Opcode::_16Bit(B16::LDR_PC_Imm8) => {
                   let (dest,src,offset) = unpack_operands!(
@@ -1614,22 +1683,31 @@ impl System{
       }
    }
 
-   fn do_move(&mut self, dest: usize, value: u32){
-      self.registers.generic[dest] = value;
+   fn do_move(&mut self, dest: usize, value: u32)->Result<(),ArmException>{
+      match dest as u8{
+         0 ..=12 => { 
+            self.registers.generic[dest] = value;
+         },
+         asm::STACK_POINTER => { self.set_sp(value)? },
+         asm::LINK_REGISTER => { self.registers.lr = value }
+         asm::PROGRAM_COUNTER => {panic!("simulator error: cannot 'do_move' on PC")}
+         _ => {unreachable!("cannot do move to unaccesible GP register")}
+      }
       let mut new_xpsr =  from_arm_bytes(self.xpsr);
-      new_xpsr = if self.registers.generic[dest] & 0x80000000 > 0{
+      new_xpsr = if value & 0x80000000 > 0{
          set_bit(31,new_xpsr)
       }else{
          clear_bit(31,new_xpsr)
       };
 
-      new_xpsr = if self.registers.generic[dest] == 0{
+      new_xpsr = if value == 0{
          set_bit(30,new_xpsr)
       }else{
          clear_bit(30,new_xpsr)
       };
 
       self.xpsr = into_arm_bytes(new_xpsr);
+      return Ok(());
    }
 
    pub fn check_permission(&self, addr: u32, acc: Access)->Result<(),ArmException>{

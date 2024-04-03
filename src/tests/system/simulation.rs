@@ -5,15 +5,16 @@ use std::io::Write;
 use std::io::{Error,ErrorKind};
 use std::path::Path;
 
-use crate::binutils::from_arm_bytes;
+use crate::binutils::{from_arm_bytes, from_arm_bytes_16b, u32_to_arm_bytes, into_arm_bytes};
 use crate::system::instructions::{zero_flag, negative_flag, carry_flag, overflow_flag};
 use crate::system::registers::{get_overflow_bit, get_carry_bit};
 use crate::tests::asm::{write_asm, asm_file_to_elf, asm_file_to_elf_armv6m};
 use crate::tests::elf::{write_asm_make_elf, link_elf};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
 use crate::system::{ArmException, System, ExceptionStatus, Mode};
-use crate::elf::decoder::to_native_endianness_32b;
-use super::gdb_script;
+use crate::elf::decoder::{to_native_endianness_32b, ElfError, get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_loadable_sections, load_sections, get_all_symbol_names, SymbolDefinition};
+use crate::to_arm_bytes;
+use super::{gdb_script, PROC_VARIABLES};
 
 use crate::elf::decoder::{
       SectionHeader,
@@ -1189,11 +1190,14 @@ pub fn should_load()->Result<(),std::io::Error>{
    .text
       LDR r0, =_some_var 
       LDR r1,[r0]
+      LDRH r0, =_some_hw
+      LDR  r1, [r0]
       NOP
       NOP
       NOP
       .pool
       _some_var: .word 0xBEEF
+      _some_hw: .2byte 0x10AA
    ";
    run_assembly(
       &Path::new("sim_load.s"),
@@ -1201,19 +1205,27 @@ pub fn should_load()->Result<(),std::io::Error>{
       |entry_point, binary|{
          let mut sys = load_code_into_system(entry_point, binary)?;
          //println!("mem: [{:?}]",sys.memory);
-         let off = sys.step()?;
+         let mut off = sys.step()?;
          let beef_ptr = sys.registers.generic[0]; 
-
-         //let word: [u8;4] = sys.memory[beef_ptr as usize .. beef_ptr as usize + 4]
-         //   .try_into()
-         //   .unwrap();
          let word = sys.alloc.get::<4>(beef_ptr);
          assert_eq!(0xBEEF_u32,from_arm_bytes(word));
-
          sys.offset_pc(off)?;
-         sys.step()?;
 
+         off = sys.step()?;
          assert_eq!(sys.registers.generic[1],0xBEEF_u32);
+         sys.offset_pc(off)?;
+
+         off = sys.step()?; 
+         let hw_ptr = sys.registers.generic[0];
+         let hw = sys.alloc.get::<2>(hw_ptr);
+         assert_eq!(0x10AA_u16,from_arm_bytes_16b(hw));
+         sys.offset_pc(off)?;
+
+         off = sys.step()?;
+         assert_eq!(sys.registers.generic[1] as u16,0x10AA_u16);
+
+
+
          return Ok(());
       }
    )?;
@@ -1256,10 +1268,102 @@ pub fn should_store()->Result<(), std::io::Error>{
    return Ok(());
 }
 
+pub fn load_code_with_sections<P: AsRef<Path>>(elf: P)->Result<(System, Vec<SymbolDefinition>),ElfError>{
+
+   let (elf_header,mut reader) = get_header(elf.as_ref())?;
+
+   let section_headers = get_all_section_headers(&mut reader, &elf_header)?;
+   assert!(!section_headers.is_empty());
+
+   let strtab_idx = get_string_table_section_hdr(&elf_header, &section_headers).unwrap();
+   let str_table_hdr = &section_headers[strtab_idx];
+
+   let maybe_symtab: Vec<&SectionHeader> = section_headers.iter()
+      .filter(|hdr| is_symbol_table_section_hdr(&elf_header, hdr))
+      .collect();
+
+   let sym_entries = get_section_symbols(&mut reader, &elf_header, &maybe_symtab[0]).unwrap();
+   let symbols = get_all_symbol_names(&mut reader, &elf_header, &sym_entries, str_table_hdr).unwrap();
+   let loadable = get_loadable_sections(&mut reader, &elf_header,&section_headers)?;
+
+   let section_data = load_sections(&mut reader, &elf_header, &section_headers, loadable)?;
+
+   return Ok((System::with_sections(section_data),symbols));
+}
+
+fn copy_inital_state(sys: &mut System, states: &Vec<u32>){
+   let initial_state: [u32;PROC_VARIABLES] = states.chunks_exact(PROC_VARIABLES)
+      .next()
+      .unwrap()
+      .try_into()
+      .expect("should be 18 variables");
+
+   sys.registers.generic[0] = initial_state[super::R0];
+   sys.registers.generic[1] = initial_state[super::R1];
+   sys.registers.generic[2] = initial_state[super::R2];
+   sys.registers.generic[3] = initial_state[super::R3];
+   sys.registers.generic[4] = initial_state[super::R4];
+   sys.registers.generic[5] = initial_state[super::R5];
+   sys.registers.generic[6] = initial_state[super::R6];
+   sys.registers.generic[7] = initial_state[super::R7];
+   sys.registers.generic[8] = initial_state[super::R8];
+   sys.registers.generic[9] = initial_state[super::R9];
+   sys.registers.generic[10] = initial_state[super::R10];
+   sys.registers.generic[11] = initial_state[super::R11];
+   sys.registers.generic[12] = initial_state[super::R12];
+   sys.registers.sp_main = initial_state[super::MSP];
+   sys.registers.sp_process = initial_state[super::PSP];
+   sys.registers.lr = initial_state[super::LR];
+   sys.registers.pc = initial_state[super::PC] as usize;
+   let xpsr_bytes = into_arm_bytes(initial_state[super::XPSR]); 
+   sys.xpsr = xpsr_bytes;
+}
+
+fn assert_states_match(sys: &System, state: &[u32; PROC_VARIABLES]){
+   assert_eq!(sys.registers.generic[0],state[super::R0]);
+   assert_eq!(sys.registers.generic[1],state[super::R1]);
+   assert_eq!(sys.registers.generic[2],state[super::R2]);
+   assert_eq!(sys.registers.generic[3],state[super::R3]);
+   assert_eq!(sys.registers.generic[4],state[super::R4]);
+   assert_eq!(sys.registers.generic[5],state[super::R5]);
+   assert_eq!(sys.registers.generic[6],state[super::R6]);
+   assert_eq!(sys.registers.generic[7],state[super::R7]);
+   assert_eq!(sys.registers.generic[8],state[super::R8]);
+   assert_eq!(sys.registers.generic[9],state[super::R9]);
+   assert_eq!(sys.registers.generic[10],state[super::R10]);
+   assert_eq!(sys.registers.generic[11],state[super::R11]);
+   assert_eq!(sys.registers.generic[12],state[super::R12]);
+   assert_eq!(sys.registers.sp_main,state[super::MSP]);
+   assert_eq!(sys.registers.sp_process,state[super::PSP]);
+   assert_eq!(sys.registers.lr,state[super::LR]);
+   assert_eq!(sys.registers.pc,state[super::PC] as usize);
+   assert_eq!(sys.xpsr,into_arm_bytes(state[super::XPSR]));
+}
+
+fn step(sys: &mut System ){
+   match sys.step(){
+      Ok(offset) => {
+         if sys.check_for_exceptions().is_none(){
+            match sys.offset_pc(offset){
+                Ok(_) => {},
+                Err(e) => {
+                   sys.set_exc_pending(e);
+                   let _ = sys.check_for_exceptions();
+                },
+            }
+         }
+      },
+      Err(e)=>{
+         sys.set_exc_pending(e);
+         let _ = sys.check_for_exceptions();
+      }
+   }
+}
+
 #[test] #[ignore] 
 pub fn hardware_linear_search(){
    let label = String::from("linear_search");
-   let script = gdb_script(&label, 12);
+   let script = gdb_script(&label);
    println!("script generated:(\n{})",&script);
    std::fs::write("dump_proc_state_linear_search", &script).unwrap();
    let output = run_script_on_remote_cpu(
@@ -1273,6 +1377,33 @@ pub fn hardware_linear_search(){
    print_states(states);
    std::fs::remove_file("dump_proc_state_linear_search").unwrap();
    panic!("want to see logs");
+}
+
+#[test] #[ignore]
+pub fn hardware_fibonacci()->Result<(),ElfError>{
+   let label = String::from("fibonacci");
+   let script = gdb_script(&label);
+   println!("generated:\n {}",&script);
+   std::fs::write("elf_samples/fib/dump_proc",&script).unwrap();
+
+   let output = run_script_on_remote_cpu(
+      "elf_samples/fib/dump_proc", 
+      "elf_samples/fib/fibonacci.elf"
+   );
+
+   let states = parse_gdb_output(&output);
+
+   let (mut sys,_) = load_code_with_sections("elf_samples/fib/fibonacci.elf")?;
+
+   copy_inital_state(&mut sys, &states);
+   for state in states.chunks_exact(PROC_VARIABLES){
+      let cpu_state: &[u32; PROC_VARIABLES] = state
+         .try_into()
+         .expect("should be 18 registers");
+      assert_states_match(&sys, cpu_state);
+      step(&mut sys);
+   }
+   Ok(())
 }
 
 

@@ -32,6 +32,11 @@ impl Simulator{
       }
    }
 
+   pub fn register_exceptions(sys: &mut System, err: ArmException){
+      sys.set_exc_pending(err);
+      sys.check_for_exceptions();
+   }
+
    pub fn step_or_signal_halt_type(sys: &mut System)->Result<(),HaltType>{
       match sys.step(){
          Ok(offset) => {

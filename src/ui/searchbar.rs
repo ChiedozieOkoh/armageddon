@@ -22,22 +22,6 @@ pub enum SearchError{
    ElementExistsOutsideDisassembly
 }
 
-macro_rules! parse_hex_or_base10 {
-   ($_type:ty,$string:expr,$is_hex:expr) => {
-      if $is_hex{
-         match <$_type>::from_str_radix($string,16){
-            Ok(v) => Some(v),
-            Err(_) => {None},
-         }
-      }else{
-         match <$_type>::from_str_radix($string,10){
-            Ok(v) => Some(v),
-            Err(_) => {None},
-         }
-      }
-   }
-}
-
 impl SearchBar{
    pub fn create()->Self{
       Self { 

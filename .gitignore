@@ -4,3 +4,5 @@ a.out
 *.s
 *.out
 *.o
+elf_samples/
+dump_state.*

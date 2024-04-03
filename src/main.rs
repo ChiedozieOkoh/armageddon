@@ -22,7 +22,8 @@ use crate::ui::App;
 struct Args{
    pub elf: PathBuf,
    pub sp_reset_val: Option<u32>,
-   pub vtor_override: Option<u32>
+   pub vtor_override: Option<u32>,
+   pub entry_point_override: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -40,7 +41,11 @@ const HELP_MSG: &'static str =  concat!(
    "\n",
    "--sp-reset-val=<HEX>    specify the stack pointer value asigned during a reset.\n",
    "                        when this value is set via the CLI the entry_point of the ELF\n",
-   "                        will be assumed to point to the reset routine handler\n" 
+   "                        will be assumed to point to the reset routine handler\n",
+   "--vtor=<HEX>            override the default value used for the vtor register.\n",
+   "                        this will also change the SP value use after a reset. the SP value will be a u32 loaded from the address\n",
+   "                        pointed to by the VTOR\n",
+   "--entry_point=<HEX>     explicitly set the entry point \n"
 );
 
 fn gui_diasm(){
@@ -57,8 +62,15 @@ fn gui_diasm(){
    let maybe_instructions  = load_instruction_opcodes(&cli_arg.elf);
    exit_on_err(&maybe_instructions);
 
-   let (disasm, entry_point, symbol_map, mut sys) = maybe_instructions.unwrap();
+   let (disasm, mut entry_point, symbol_map, mut sys) = maybe_instructions.unwrap();
    println!("sys memory image: 0 -> {} pages ",sys.alloc.pages());
+
+   if cli_arg.entry_point_override.is_some(){
+      println!("overriding entry point");
+      entry_point = cli_arg.entry_point_override.unwrap() as usize;
+      sys.set_pc(entry_point & !1).unwrap();
+   }
+
    if cli_arg.sp_reset_val.is_some(){
       println!("overriding reset handler ptr and sp_reset_val");
       sys.reset_cfg = Some(system::ResetCfg {
@@ -71,6 +83,7 @@ fn gui_diasm(){
       println!("overriding default VTOR value");
       sys.set_vtor(cli_arg.vtor_override.unwrap());
    }
+
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 
    for i in disasm.into_iter(){
@@ -123,8 +136,9 @@ fn parse_args(args: Vec<String>)->Result<Args,ParseErr>{
    }
 
    let maybe_vtor = get_optional_hex(&args, "--vtor=")?;
+   let maybe_entry_point = get_optional_hex(&args, "--entry_point=")?;
 
-   Ok(Args { elf: maybe_file, sp_reset_val: reset_val, vtor_override: maybe_vtor })
+   Ok(Args { elf: maybe_file, sp_reset_val: reset_val, vtor_override: maybe_vtor, entry_point_override: maybe_entry_point })
 }
 
 fn cli_disasm(){

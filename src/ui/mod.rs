@@ -1,9 +1,9 @@
-use std::{fmt::Display, sync::{Mutex, Arc}, ops::Deref, path::{Path, PathBuf}};
+use std::{fmt::Display, sync::{Mutex, Arc}, ops::{Deref, DerefMut}, path::{Path, PathBuf}, borrow::BorrowMut};
 
 use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list, image, tooltip, mouse_area, Row}, Application, Theme, executor, Command, Element, futures::StreamExt};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol, TextPosition}, binutils::from_arm_bytes_16b, elf::decoder::SymbolDefinition};
+use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self, write_memory}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol, TextPosition}, binutils::{from_arm_bytes_16b, u32_to_arm_bytes}, elf::decoder::SymbolDefinition, to_arm_bytes};
 
 use crate::dbg_ln;
 use crate::binutils::from_arm_bytes;
@@ -128,6 +128,22 @@ pub enum Cast{
    IBYTE
 }
 
+macro_rules! parse_hex_or_base10 {
+   ($_type:ty,$string:expr,$is_hex:expr) => {
+      if $is_hex{
+         match <$_type>::from_str_radix($string,16){
+            Ok(v) => Some(v),
+            Err(_) => {None},
+         }
+      }else{
+         match <$_type>::from_str_radix($string,10){
+            Ok(v) => Some(v),
+            Err(_) => {None},
+         }
+      }
+   }
+}
+
 fn stringify_slice(arr: &[u8],cast: Cast)->String{
    let mut display = String::new();
    match cast{
@@ -191,13 +207,23 @@ impl Display for Cast{
 struct MemoryView{
    pub start: u32, 
    pub end: u32,
-   pub cast: Cast
+   pub view_cast: Cast,
+   //pub entry_cast: Cast,
+   pub raw_entry_data: String,
+   pub sanitised_entry: Vec<u8>
 }
 
 impl Default for MemoryView{
-    fn default() -> Self {
-        Self{start: 0, end: 0xFFFF, cast: Cast::UBYTE}
-    }
+   fn default() -> Self {
+      Self{
+         start: 0,
+         end: 0xFFFF,
+         view_cast: Cast::UBYTE,
+         //entry_cast: Cast::UBYTE,
+         raw_entry_data: String::new(),
+         sanitised_entry: Vec::new()
+      }
+   }
 }
 
 fn user_cmds<'a>(bkpt: &BkptInput)->Element<'a, Event>{
@@ -565,7 +591,14 @@ fn pane_render<'a>(
       },
 
       PaneType::MemoryExplorer => {
-         let view = app.mem_view.as_ref().unwrap_or_else(|| &MemoryView{start: 0,end: 0xFFFF, cast: Cast::UBYTE});
+         let def= MemoryView{
+            start: 0,
+            end: 32,
+            view_cast: Cast::UBYTE,
+            raw_entry_data: String::new(),
+            sanitised_entry: Vec::new()
+         };
+         let view = app.mem_view.as_ref().unwrap_or_else(|| {&def});
          let inputs = row(vec![
             text_input("start (hex)",&app.pending_mem_start)
                .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetStart(s))))
@@ -577,7 +610,7 @@ fn pane_render<'a>(
                .on_submit(Event::Ui(Gui::Exp(Explorer::Update)))
                .into(),
 
-            pick_list(CAST_OPTIONS, Some(view.cast.clone()), |c| Event::Ui(Gui::Exp(Explorer::SetCast(c))))
+            pick_list(CAST_OPTIONS, Some(view.view_cast.clone()), |c| Event::Ui(Gui::Exp(Explorer::SetViewCast(c))))
                .into()
          ]);
          //println!("should update view {}",app.update_view);
@@ -586,31 +619,38 @@ fn pane_render<'a>(
             }else{
                if app.update_view{
                   match app.sync_sys.try_lock(){
-                    Ok(sys) => {
-                       //let start = std::cmp::min(sys.memory.len() - 2,view.start as usize);
-                       //let end = std::cmp::min(sys.memory.len() - 1,view.end as usize);
-                       let real_start = std::cmp::min(view.start,view.end);
-                       let real_end = std::cmp::max(view.start,view.end);
+                     Ok(sys) => {
+                        //let start = std::cmp::min(sys.memory.len() - 2,view.start as usize);
+                        //let end = std::cmp::min(sys.memory.len() - 1,view.end as usize);
+                        let real_start = std::cmp::min(view.start,view.end);
+                        let real_end = std::cmp::max(view.start,view.end);
 
-                       //let data = &sys.memory[real_start ..= real_end];
-                       let data = sys.alloc.view(real_start,real_end);
-                       let string_data = stringify_slice(&data, view.cast.clone());
-                       scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
-                    },
-                    Err(_) => {
-                       println!("could not acquire dbg thread lock!!!");
-                       scrollable(text("...").size(TEXT_SIZE).width(iced::Length::Fill))
-                    },
-                }
+                        //let data = &sys.memory[real_start ..= real_end];
+                        let data = sys.alloc.view(real_start,real_end);
+                        let string_data = stringify_slice(&data, view.view_cast.clone());
+                        scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
+                     },
+                     Err(_) => {
+                        println!("could not acquire dbg thread lock!!!");
+                        scrollable(text("...").size(TEXT_SIZE).width(iced::Length::Fill))
+                     },
+                  }
                }else{
                   scrollable(text("... press enter to update view").size(TEXT_SIZE).width(iced::Length::Fill))
                }
-         };
+            };
 
+         /*let data_entry = row![
+            text_input(
+               "write data at this memory address",
+               &view.raw_entry_data
+            )
+         ];*/
          container(
             column![
                inputs,
-               text_box
+               text_box,
+               //data_entry
             ]
          ).width(iced::Length::Fill).height(iced::Length::Fill).into()
       }
@@ -814,9 +854,11 @@ impl Application for App{
             self._state.split(axis, &pane, kind);
             self.n_panes += 1;
          },
+
          Event::Ui(Gui::ResizePane(pane_grid::ResizeEvent{split, ratio})) => {
             self._state.resize(&split,ratio);
          },
+
          Event::Ui(Gui::ClosePane(pane)) => {
             self._state.close(&pane);
             self.n_panes -= 1;
@@ -930,6 +972,67 @@ impl Application for App{
                   self.view_error = Some(format!("could not parse '{}' as a hexadecimal",&self.pending_mem_end));
                }
             }
+
+            match self.mem_view{
+                Some(ref mut v) => {
+                   let trimmed = v.raw_entry_data.trim();
+                   if !trimmed.is_empty(){
+                      match self.sync_sys.try_lock(){
+                         Ok(mut sys) => {
+                            let mut address = v.start;
+                            if trimmed.contains(char::is_whitespace){
+                               for values in trimmed.split_whitespace(){
+                                  match v.view_cast{
+                                     Cast::UWORD => {
+                                        let maybe_word = parse_hex_or_base10!(u32, values, values.starts_with("0x"));
+                                        match maybe_word{
+                                           Some(word)=> {
+                                              let bytes = to_arm_bytes!(u32,word);
+                                              let r = write_memory(sys.deref_mut().into(), address, bytes);
+                                              match r{
+                                                 Ok(_) => address += 4,
+                                                 Err(e) => {
+                                                    Simulator::register_exceptions(sys.deref_mut().into(), e.clone());
+                                                    if e.is_fault(){
+                                                       match e{
+                                                          ArmException::HardFault(msg) => {
+                                                             let mut err_msg = String::from("Could not complete memory write due to hardfault\n");
+                                                             err_msg.push_str(&msg);
+                                                             self.view_error = Some(err_msg)
+                                                          },
+                                                          _ => {self.view_error = Some(String::from("could not complete memory write due to fault"));}
+                                                       }
+                                                       break;
+                                                    }
+                                                 },
+                                              }
+                                           },
+                                           None => {}
+                                        }
+
+                                        address += 4;
+                                     },
+                                     Cast::IWORD => {
+                                     },
+                                     Cast::UHALF => {
+                                     },
+                                     Cast::IHALF => {
+                                     },
+                                     Cast::UBYTE => {
+                                     },
+                                     Cast::IBYTE => {
+                                     },
+                                  }
+                               }
+                            }else{
+                            }
+                         },
+                         Err(_) => println!("cannot edit memory in continue mode"),
+                      }
+                   }
+                },
+                None => {},
+            }
          },
 
          Event::Ui(Gui::Exp(Explorer::SetStart(s))) => {
@@ -942,12 +1045,23 @@ impl Application for App{
             self.update_view = false;
          },
 
-         Event::Ui(Gui::Exp(Explorer::SetCast(c))) => {
+         Event::Ui(Gui::Exp(Explorer::SetViewCast(c))) => {
             match self.mem_view{
-               Some(ref mut current) => current.cast = c,
+               Some(ref mut current) => current.view_cast = c,
                None => {
                   let mut new_view = MemoryView::default();
-                  new_view.cast = c;
+                  new_view.view_cast = c;
+                  self.mem_view = Some(new_view);
+               },
+            }
+         },
+
+         Event::Ui(Gui::Exp(Explorer::SetEntry(e)))=> {
+            match self.mem_view{
+               Some(ref mut current) => current.raw_entry_data = e,
+               None => {
+                  let mut new_view = MemoryView::default();
+                  new_view.raw_entry_data = e;
                   self.mem_view = Some(new_view);
                },
             }
@@ -1110,7 +1224,8 @@ pub enum Gui{
 pub enum Explorer{
    SetStart(String),
    SetEnd(String),
-   SetCast(Cast),
+   SetViewCast(Cast),
+   SetEntry(String),
    Update,
 }
 
@@ -1146,3 +1261,4 @@ pub fn parse_hex(hex: &str)->Option<u32>{
       }
    }
 }
+
