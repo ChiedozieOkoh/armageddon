@@ -145,11 +145,11 @@ pub enum SectionHeaderFlag{
 #[repr(C,packed)]
 #[derive(Debug)]
 pub struct SectionHeader{
-   name: ElfWord,
+   pub name: ElfWord,
    _type: ElfWord,
    flags: ElfWord,
    _addr_in_memory_img: Addr,
-   offset_of_entries_in_bytes: ElfOffset,
+   pub offset_of_entries_in_bytes: ElfOffset,
    section_size_in_bytes: ElfWord,  // not header size
    link: ElfWord,
    info: ElfWord,

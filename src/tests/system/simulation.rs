@@ -1,7 +1,7 @@
 
 use std::any::Any;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Write, Seek, SeekFrom};
 use std::io::{Error,ErrorKind};
 use std::path::Path;
 
@@ -12,7 +12,7 @@ use crate::tests::asm::{write_asm, asm_file_to_elf, asm_file_to_elf_armv6m};
 use crate::tests::elf::{write_asm_make_elf, link_elf};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
 use crate::system::{ArmException, System, ExceptionStatus, Mode};
-use crate::elf::decoder::{to_native_endianness_32b, ElfError, get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_loadable_sections, load_sections, get_all_symbol_names, SymbolDefinition};
+use crate::elf::decoder::{to_native_endianness_32b, ElfError, get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_loadable_sections, load_sections, get_all_symbol_names, SymbolDefinition, LiteralPools};
 use crate::to_arm_bytes;
 use super::{gdb_script, PROC_VARIABLES};
 
@@ -1340,6 +1340,28 @@ fn assert_states_match(sys: &System, state: &[u32; PROC_VARIABLES]){
    assert_eq!(sys.xpsr,into_arm_bytes(state[super::XPSR]));
 }
 
+fn are_states_equal(sys: &System, state: &[u32; PROC_VARIABLES])->bool{
+   return (sys.registers.generic[0] == state[super::R0]) |
+      (sys.registers.generic[1] == state[super::R1]) |
+      (sys.registers.generic[2] == state[super::R2]) |
+      (sys.registers.generic[3] == state[super::R3]) |
+      (sys.registers.generic[4] == state[super::R4]) |
+      (sys.registers.generic[5] == state[super::R5]) |
+      (sys.registers.generic[6] == state[super::R6]) |
+      (sys.registers.generic[7] == state[super::R7]) |
+      (sys.registers.generic[8] == state[super::R8]) |
+      (sys.registers.generic[9] == state[super::R9]) |
+      (sys.registers.generic[10] == state[super::R10]) |
+      (sys.registers.generic[11] == state[super::R11]) |
+      (sys.registers.generic[12] == state[super::R12]) |
+      (sys.registers.sp_main == state[super::MSP]) |
+      (sys.registers.sp_process == state[super::PSP]) |
+      (sys.registers.lr == state[super::LR]) |
+      (sys.registers.pc == state[super::PC] as usize) |
+      (sys.xpsr == into_arm_bytes(state[super::XPSR]));
+}
+
+
 fn step(sys: &mut System ){
    match sys.step(){
       Ok(offset) => {
@@ -1406,4 +1428,149 @@ pub fn hardware_fibonacci()->Result<(),ElfError>{
    Ok(())
 }
 
+#[test] #[ignore]
+fn fuzzy_testsuite()->Result<(),ElfError>{
+   let bin_path = Path::new("elf_samples/fuzzy/build/fuzzy.elf");
 
+   let label = String::from("sim_testcase_init");
+   let script = gdb_script(&label);
+   println!("generated:\n {}",&script);
+   std::fs::write("elf_samples/fuzzy/dump_proc",&script).unwrap();
+
+   for _ in 0 .. 1{
+      create_fuzzy_test(bin_path)?;
+      let output = run_script_on_remote_cpu(
+         "elf_samples/fuzzy/dump_proc",
+         "elf_samples/fuzzy/build/fuzzy.elf"
+      );
+
+      let states = parse_gdb_output(&output);
+      let mut stages = output.split("<<-->>");
+      let (mut sys,_) = load_code_with_sections("elf_samples/fuzzy/build/fuzzy.elf")?;
+      copy_inital_state(&mut sys, &states);
+      //SPOOF VTOR value so it points to the ram table embeded by the pico SDK
+      sys.set_vtor(0x10000100);
+      
+      for state in states.chunks_exact(PROC_VARIABLES){
+         println!("{}",stages.next().unwrap());
+         let cpu_state: &[u32; PROC_VARIABLES] = state
+            .try_into()
+            .expect("should be 18 registers");
+         if !are_states_equal(&sys, cpu_state){
+            println!("ERROR: State inconsistency");
+            println!("real hardware state");
+            println!("{:?}",cpu_state);
+            println!("simulator hardware state");
+            println!("{:?}",vec![
+               sys.registers.generic[0],
+               sys.registers.generic[1],
+               sys.registers.generic[2],
+               sys.registers.generic[3],
+               sys.registers.generic[4],
+               sys.registers.generic[5],
+               sys.registers.generic[6],
+               sys.registers.generic[7],
+               sys.registers.generic[8],
+               sys.registers.generic[9],
+               sys.registers.generic[10],
+               sys.registers.generic[11],
+               sys.registers.generic[12],
+               sys.registers.sp_main,
+               sys.registers.sp_process,
+               sys.registers.lr,
+               sys.registers.pc as u32,
+               from_arm_bytes(sys.xpsr)
+            ]);
+            std::fs::write("elf_samples/fuzzy/failed/hardware_run",&output)?;
+            panic!("state inconsistency");
+         }
+
+         step(&mut sys);
+      }
+   }
+
+   Ok(())
+}
+
+fn create_fuzzy_test<P: AsRef<Path>>(bin_path: P)->Result<(),ElfError>{
+   use std::io::Seek;
+   use rand::prelude::*;
+
+   let (elf_header, mut reader) = get_header(bin_path.as_ref())?;
+
+   let section_headers = get_all_section_headers(&mut reader, &elf_header)?;
+
+   let strtab_idx = get_string_table_section_hdr(&elf_header, &section_headers).unwrap();
+   let str_table_hdr = &section_headers[strtab_idx];
+
+   let maybe_symtab: Vec<&SectionHeader> = section_headers.iter()
+      .filter(|hdr| is_symbol_table_section_hdr(&elf_header, hdr))
+      .collect();
+
+   let sym_entries = get_section_symbols(&mut reader, &elf_header, &maybe_symtab[0])
+      .unwrap();
+
+   let symbols = get_all_symbol_names(
+      &mut reader,
+      &elf_header,
+      &sym_entries,
+      str_table_hdr
+   ).unwrap();
+
+   
+   let pool_label = symbols.iter().position(|sym| sym.name.eq("sim_testcase_pool"));
+   assert!(pool_label.is_some());
+   let sections = get_loadable_sections(&mut reader, &elf_header, &section_headers)?; 
+   let t = sections.iter().position(|s| s.name.eq(".text"));
+
+   let text_hdr = section_headers.iter().position(|hdr| {
+      let name = to_native_endianness_32b(&elf_header, &hdr.name);
+      name == sections[t.unwrap()].name_idx
+   });
+
+   let text_offset = sections[t.unwrap()].start;
+   let relative_offset_in_section = symbols[pool_label.unwrap()].position as u32 - text_offset;
+   let text_data_file_offset = to_native_endianness_32b(&elf_header,&section_headers[text_hdr.unwrap()].offset_of_entries_in_bytes);
+   let abs_offset_in_file = text_data_file_offset + relative_offset_in_section;
+   let first_word = if (abs_offset_in_file & !3) == abs_offset_in_file{
+      abs_offset_in_file
+   }else{
+      (abs_offset_in_file + 4) & !3
+   };
+
+   println!(" first word of pool @{:#x} ({:#x})",first_word,first_word + text_offset);
+   let mut rng = rand::thread_rng();
+   let random_state: Vec<u8> = vec![
+      u32_to_arm_bytes(rng.gen()),
+      u32_to_arm_bytes(rng.gen()),
+      u32_to_arm_bytes(rng.gen()),
+      u32_to_arm_bytes(rng.gen()),
+      u32_to_arm_bytes(rng.gen()),
+      u32_to_arm_bytes(rng.gen()),
+      u32_to_arm_bytes(rng.gen()),
+      u32_to_arm_bytes(rng.gen())
+   ].into_iter().flatten().collect();
+
+   assert_eq!(random_state.len(),8 * 4);
+
+   std::mem::drop(reader);
+   use std::fs::OpenOptions;
+   println!("injecting random data to 'sim_testcase_pool' literal pool");
+   let mut writer = OpenOptions::new().write(true).open(bin_path)?;
+   println!("writing {:?} to @ {:#x}(file offset)",random_state,first_word);
+   writer.seek(SeekFrom::Start(first_word as u64))?;
+   writer.write(&random_state)?;
+
+   println!("injecting random data to 'sim_testcode_placeholder' ");
+   let testcode_label = symbols.iter().position(|sym| sym.name.eq("sim_testcode_placeholder"));
+   assert!(testcode_label.is_some());
+   let relative_offset_in_section = symbols[testcode_label.unwrap()].position as u32 - text_offset;
+   let abs_offset_in_file = text_data_file_offset + relative_offset_in_section;
+   assert_eq!(abs_offset_in_file % 4,0);
+
+   writer.seek(SeekFrom::Start(abs_offset_in_file as u64))?;
+   let maybe_instruction: [u8;4] = u32_to_arm_bytes(rng.gen());
+   println!("writing to {:?} to @ {:#x}(file offset)",maybe_instruction,abs_offset_in_file);
+   writer.write(&maybe_instruction)?;
+   return Ok(());
+}

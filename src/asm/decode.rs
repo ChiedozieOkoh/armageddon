@@ -419,7 +419,8 @@ fn misc(hw: HalfWord)->Opcode{
       0x60 ..= 0x6F => Opcode::_16Bit(B16::POP),
       0x70 ..=0x77 => Opcode::_16Bit(B16::BREAKPOINT),
       _ => {
-         panic!("unrecognised encoding  [{:#x} {:#x}]",hw[0],hw[1]);
+         println!("WARN: enrecognised misc encoding [{:#x} {:#x}]",hw[0],hw[1]);
+         Opcode::_16Bit(B16::UNDEFINED)
       },
    }
 }

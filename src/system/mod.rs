@@ -1585,6 +1585,11 @@ impl System{
                   }else{
                      return Ok(0_i32);
                   }
+               },
+               
+               Opcode::_16Bit(B16::UNDEFINED)=>{
+                  println!("WARN: execution of the UDF instructions will result in a hardfault");
+                  return Err(ArmException::HardFault(String::from("execution of a UDF instruction is undefined")));
                }
                _ => todo!("{:?} has not been implemented yet",code)
             } 
@@ -1649,6 +1654,10 @@ impl System{
 
                   println!("executing {}, {}",instr_32b,offset);
                   return Ok(offset);
+               },
+               Opcode::_32Bit(B32::UNDEFINED) => {
+                  println!("WARN: execution of the UDF instructions will result in a hardfault");
+                  return Err(ArmException::HardFault(String::from("execution of a UDF.32 instruction is undefined")));
                },
                _ => todo!("{:?} has not been implemented yet",instr_32b)
             }
