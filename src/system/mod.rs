@@ -15,8 +15,6 @@ pub mod registers;
 pub mod instructions;
 pub mod simulator;
 
-pub const TRACED_VARIABLES: usize = 8;
-
 pub struct System{
    pub registers: Registers,
    pub xpsr: Apsr,
@@ -1184,7 +1182,6 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
-               //TODO handle cases where move writes to SP, LR or PC
                Opcode::_16Bit(B16::MOV_Imm8)=> {
                   let (dest, imm8) = unpack_operands!(
                      operands,
@@ -2002,9 +1999,9 @@ impl ArmException{
          Self::Reset => -3,
          Self::Nmi => -2,
          Self::HardFault(_) => -1,
-         Self::Svc =>{ ((_scs.shpr2 & 0x80000000) >> 31) as i32 },
-         Self::PendSV =>{ ((_scs.shpr3 & 0x00800000) >> 23) as i32 },
-         Self::SysTick =>{ ((_scs.shpr3 & 0x80000000) >> 31) as i32 },
+         Self::Svc =>{ ((_scs.shpr2 & 0xC0000000) >> 30) as i32 },
+         Self::PendSV =>{ ((_scs.shpr3 & 0x00C00000) >> 22) as i32 },
+         Self::SysTick =>{ ((_scs.shpr3 & 0xC0000000) >> 30) as i32 },
          Self::ExternInterrupt(n) => _scs.nvic_priority_of(*n),
       }
    }
@@ -2012,6 +2009,11 @@ impl ArmException{
 
 #[derive(Debug)]
 enum MemoryMappedRegister{
+   nvic_iser,
+   nvic_icer,
+   nvic_ispr,
+   nvic_icpr,
+   nvic_ipr(u8),
    icsr,
    vtor,
    aircr,
@@ -2024,6 +2026,25 @@ enum MemoryMappedRegister{
 impl MemoryMappedRegister{
    pub fn from_address(address: u32)->Option<MemoryMappedRegister>{
       match address{
+         0xE000E100 =>{
+            Some(Self::nvic_iser)
+         },
+         0xE000E180 =>{
+            Some(Self::nvic_icer)
+         },
+         0xE000E200 =>{
+            Some(Self::nvic_ispr)
+         },
+         0xE000E280 =>{
+            Some(Self::nvic_icpr)
+         },
+         0xE000E400 ..= 0xE000E41C=>{
+            let offset = address - 0xE000E400; 
+            let index = offset / 4;
+            assert!(index >= 0);
+            assert!(index < 8);
+            Some(Self::nvic_ipr(index as u8))
+         },
          0xE000ED04 =>{
             Some(Self::icsr)
          },
@@ -2052,6 +2073,19 @@ impl MemoryMappedRegister{
       }
    }
 
+   pub fn pending_external_interrupts(sys: &System)->u32{
+      let mut pending: u32 = 0;
+      for i in 0 .. 32{
+         match sys.active_exceptions[16 + i]{
+            ExceptionStatus::Pending | ExceptionStatus::ActiveAndPending=>{
+               pending |= 1 << i;
+            },
+            _=> {}
+         }
+      }
+      pending
+   }
+
    pub fn read(&self, sys: &System)->u32{
       match self{
          MemoryMappedRegister::icsr => sys.scs.icsr,
@@ -2061,6 +2095,17 @@ impl MemoryMappedRegister{
          MemoryMappedRegister::ccr => 0x208,
          MemoryMappedRegister::shpr2 => sys.scs.shpr2,
          MemoryMappedRegister::shpr3 => sys.scs.shpr3,
+         MemoryMappedRegister::nvic_iser => sys.scs.enabled_interrupts,
+         MemoryMappedRegister::nvic_icer => sys.scs.enabled_interrupts,
+         MemoryMappedRegister::nvic_ispr => {
+            Self::pending_external_interrupts(sys)
+         },
+         MemoryMappedRegister::nvic_icpr => {
+            Self::pending_external_interrupts(sys)
+         },
+         MemoryMappedRegister::nvic_ipr(i)=>{
+            sys.scs.ipr[*i as usize]
+         }
       }
    }
 
@@ -2159,16 +2204,72 @@ impl MemoryMappedRegister{
             dbg_ln!("WARN: CCR is readonly");
          },
          MemoryMappedRegister::shpr2 => {
-            sys.scs.shpr2 = (v & 0x80000000);
+            sys.scs.shpr2 = (v & 0xC0000000);
          },
          MemoryMappedRegister::shpr3 => {
-            sys.scs.shpr3 = (v & 0x80800000);
+            sys.scs.shpr3 = (v & 0xC0C00000);
          },
+         MemoryMappedRegister::nvic_iser =>{
+            sys.scs.enabled_interrupts = v;
+         },
+
+         MemoryMappedRegister::nvic_icer =>{
+            dbg_ln!("disabling interrupts {:#x}",v);
+            dbg_ln!("enabled interrupts before clear: {}",sys.scs.enabled_interrupts);
+            dbg_ln!("enabled interrupts after: {}",sys.scs.enabled_interrupts ^ v);
+            sys.scs.enabled_interrupts = sys.scs.enabled_interrupts ^ v;
+         },
+
+         MemoryMappedRegister::nvic_ispr =>{
+            for i in 0 .. 32{
+               if sys.scs.is_nvic_interrupt_enabled(i as u32){
+                  if (v & (1 << i)) > 0{
+                     match sys.active_exceptions[16 + i]{
+                        ExceptionStatus::Active => {
+                           dbg_ln!("exception {} is already active ",16 + i);
+                           sys.active_exceptions[16 + i] = ExceptionStatus::ActiveAndPending;
+                        },
+                        ExceptionStatus::Inactive => {
+                           sys.active_exceptions[16 + i] = ExceptionStatus::Pending;
+                        },
+                        ExceptionStatus::ActiveAndPending | ExceptionStatus::Pending => {
+                           dbg_ln!("exception {} is already pending",16 + i);
+                        },
+                     }
+                  }
+               }else{
+                  dbg_ln!("WARN: cannot set disabled interrupt {} to PENDING",i);
+               }
+            }
+         },
+
+         MemoryMappedRegister::nvic_icpr =>{
+            for i in 0 .. 32{
+               if (v & (1 << i)) > 0{
+                  match sys.active_exceptions[16 + i]{
+                     ExceptionStatus::Pending => {
+                        sys.active_exceptions[16 + i] = ExceptionStatus::Inactive;
+                     },
+                     ExceptionStatus::ActiveAndPending =>{
+                        sys.active_exceptions[16 + i] = ExceptionStatus::Active;
+                     },
+                     _ => {}
+                  }
+               }
+            }
+         },
+
+         MemoryMappedRegister::nvic_ipr(i)=>{
+            dbg_ln!("writing {:#x} to IPR{}",v & 0xC0C0C0C0,i);
+            let priority_bits = v & 0xC0C0C0C0;
+            sys.scs.ipr[*i as usize] = priority_bits;
+         }
       }
    }
 }
 
 pub struct SystemControlSpace{
+   pub enabled_interrupts: u32,
    pub icsr: u32,
    pub vtor: u32,
    pub aircr: u32,
@@ -2176,12 +2277,13 @@ pub struct SystemControlSpace{
    pub ccr: u32,
    pub shpr2: u32,
    pub shpr3: u32,
-   ipr: [u32;8]
+   pub ipr: [u32;8]
 }
 
 impl SystemControlSpace{
    pub fn reset()->Self{
       Self { 
+         enabled_interrupts: 0,
          icsr: 0,
          vtor: 0,
          aircr: 0,
@@ -2212,9 +2314,14 @@ impl SystemControlSpace{
    pub fn nvic_priority_of(&self, exec: u32)->i32{
       let word_offset = (exec - 16) & 0xFFFFFFFC;
       let intra_word_offset = (exec - 16) - word_offset;
-      let mut shift = 7; 
+      let mut shift = 6; 
       shift += 8 * intra_word_offset;
-      return ((self.ipr[word_offset as usize] & (1 << shift)) >> shift) as i32;
+      dbg_ln!("fetching priority of exception {} from IPR{}",exec,word_offset/4);
+      return ((self.ipr[(word_offset/4) as usize] & (0b11 << shift)) >> shift) as i32;
+   }
+
+   pub fn is_nvic_interrupt_enabled(&self,interrupt_n: u32)-> bool{
+      (self.enabled_interrupts & (1 << interrupt_n)) > 0
    }
 }
 

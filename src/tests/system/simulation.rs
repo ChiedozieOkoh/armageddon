@@ -1030,6 +1030,119 @@ pub fn software_interrupt_triggers()->Result<(),std::io::Error>{
 }
 
 #[test]
+pub fn nvic_test()->Result<(),std::io::Error>{
+   let code = b".thumb
+         .text
+         STR r1,[r0, #0]
+         STR r1,[r0, #0]
+         STR r1,[r0, #0]
+         STR r1,[r0, #0]
+         STR r1,[r0, #0]
+         STR r1,[r0, #0]
+         STR r1,[r0, #0]
+      ";
+
+   run_assembly_armv6m(
+      Path::new("sim_nvic.s"),
+      code, 
+      |entry_point, code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+
+         // should memory map NVIC_ISER register
+         let nvic_iser: u32 = 0xE000E100;
+         let enabled_interrupts: u32 = 0x80000000 | 0b110;
+         sys.registers.generic[0] = nvic_iser;
+         sys.registers.generic[1] = enabled_interrupts; 
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         assert_eq!(sys.scs.is_nvic_interrupt_enabled(1),true);
+         assert_eq!(sys.scs.is_nvic_interrupt_enabled(2),true);
+         assert_eq!(sys.scs.is_nvic_interrupt_enabled(31),true);
+         assert_eq!(sys.scs.enabled_interrupts,enabled_interrupts);
+
+         // should ignore attempts to trigger disabled interrupts
+         let nvic_ispr: u32 = 0xE000E200; 
+         let req_pending = !enabled_interrupts;
+         sys.registers.generic[0] = nvic_ispr;
+         sys.registers.generic[1] = req_pending;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         for exc in sys.active_exceptions{
+            assert!(matches!(exc,ExceptionStatus::Inactive));
+         }
+         
+         //should allow enabled interrupts to be triggered
+         let pending = 0xC0000003;
+         sys.registers.generic[1] = pending;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         assert!(matches!(sys.active_exceptions[16 + 31],ExceptionStatus::Pending));
+         assert!(matches!(sys.active_exceptions[16 + 1],ExceptionStatus::Pending));
+         assert!(matches!(sys.active_exceptions[16 + 30],ExceptionStatus::Inactive));
+         assert!(matches!(sys.active_exceptions[16 + 0],ExceptionStatus::Inactive));
+
+         //should allow pending enabled interrupts to be cleared
+         let nvic_icpr = 0xE000E280;
+         let to_clear = 0x80000000;
+         sys.registers.generic[0] = nvic_icpr;
+         sys.registers.generic[1] = to_clear;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         assert!(matches!(sys.active_exceptions[16 + 31],ExceptionStatus::Inactive));
+
+         //can disable interrupts
+         let nvic_icer = 0xE000E180;
+         let to_disable = 0b10;
+         sys.registers.generic[0] = nvic_icer;
+         sys.registers.generic[1] = to_disable;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         assert_eq!(sys.scs.is_nvic_interrupt_enabled(1),false);
+         assert_eq!(sys.scs.enabled_interrupts,0x80000004);
+
+         //can change priorities
+         let nvic_ipr7 = 0xE000E41C;
+         let priorities = 0xCF8F4F0F;
+         sys.registers.generic[0] = nvic_ipr7;
+         sys.registers.generic[1] = priorities;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         assert_eq!(sys.scs.nvic_priority_of(47),3);
+         assert_eq!(sys.scs.nvic_priority_of(46),2);
+         assert_eq!(sys.scs.nvic_priority_of(45),1);
+         assert_eq!(sys.scs.nvic_priority_of(44),0);
+         assert_eq!(sys.scs.ipr[7],0xC0804000);
+
+         let nvic_ipr0 = 0xE000E400;
+         let priorities = 0x40;
+         sys.registers.generic[0] = nvic_ipr0;
+         sys.registers.generic[1] = priorities;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         assert_eq!(sys.scs.nvic_priority_of(16),1);
+         assert_eq!(sys.scs.ipr[0],0x40);
+         Ok(())
+      }
+
+   )?;
+   Ok(())
+}
+
+#[test]
 pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
    let code = b".thumb
          .text
@@ -1061,7 +1174,7 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
 
          let i = sys.step()?;
          sys.offset_pc(i)?;
-         assert_eq!(ArmException::Svc.priority_group(&sys.scs),1);
+         assert_eq!(ArmException::Svc.priority_group(&sys.scs),0b10);
          assert_eq!(sys.scs.shpr2 & 1 << 31,1 <<31);
 
          let i = sys.step()?;
@@ -1072,8 +1185,8 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
 
          let i = sys.step()?;
          sys.offset_pc(i)?;
-         assert_eq!(ArmException::SysTick.priority_group(&sys.scs),1);
-         assert_eq!(ArmException::PendSV.priority_group(&sys.scs),1);
+         assert_eq!(ArmException::SysTick.priority_group(&sys.scs),0b10);
+         assert_eq!(ArmException::PendSV.priority_group(&sys.scs),0b10);
          assert_eq!(sys.scs.shpr3 & 1 << 31,1 << 31);
          assert_eq!(sys.scs.shpr3 & 1 << 23,1 << 23);
          Ok(())
