@@ -30,7 +30,8 @@ pub struct System{
    pub trace: String,
    pub alloc: BlockAllocator,
    pub reset_cfg: Option<ResetCfg>,
-   pub vtor_override: Option<u32>
+   pub vtor_override: Option<u32>,
+   locked_up: bool
 }
 
 pub struct ResetCfg{
@@ -223,6 +224,7 @@ impl System{
          alloc: BlockAllocator::create(),
          reset_cfg: None,
          vtor_override: None,
+         locked_up: false,
       }
    }
 
@@ -244,6 +246,7 @@ impl System{
          alloc: BlockAllocator::fill(text),
          reset_cfg: None,
          vtor_override: None,
+         locked_up: false
       }
    }
 
@@ -283,6 +286,7 @@ impl System{
          alloc: BlockAllocator::init(memory),
          reset_cfg: None,
          vtor_override: None,
+         locked_up: false
       }
    }
 
@@ -485,7 +489,8 @@ impl System{
 
    fn lockup(&mut self){
       self.registers.pc = 0xFFFFFFFE;
-      panic!("locked up at priority lvl:  {}",self.execution_priority(self.primask,&self.scs));
+      self.locked_up = true;
+      println!("locked up at priority lvl:  {}",self.execution_priority(self.primask,&self.scs));
    }
 
    pub fn set_exc_pending(&mut self, exc: ArmException){
@@ -493,7 +498,7 @@ impl System{
       match exc{
          ArmException::HardFault(msg) => {
             if !msg.trim().is_empty(){
-               println!("HARDFAULT PENDING: {}",msg);
+               //println!("HARDFAULT PENDING: {}",msg);
             }
          },
          _ => {}
@@ -501,40 +506,56 @@ impl System{
    }
 
    pub fn check_for_exceptions(&mut self)->Option<u32>{
+      let mut maybe_taken: Option<ArmException> =  None; 
       for i in 0 .. self.active_exceptions.len(){
          match &self.active_exceptions[i]{
             ExceptionStatus::Pending => {
-               let maybe_exp: Option<ArmException> = ArmException::from_exception_number(i as u32);
-               match maybe_exp{
-                  Some(exc) => {
-                     println!(
-                        "execution == {} exception == {}",
-                        self.execution_priority(self.primask,&self.scs),
-                        exc.priority_group(&self.scs)
-                     );
-                     if exc.priority_group(&self.scs) < self.execution_priority(self.primask,&self.scs){
-                        match self.init_exception(exc){
-                           Ok(n) => {
-                              return n;
-                           },
-                           Err(exc) => {
-                              panic!("error during exception entry {:?}",exc);
-                              let current_priority = self.execution_priority(self.primask, &self.scs);
-                              if current_priority == -1 || current_priority == -2{
-                                 self.lockup();
-                              }
-                              return None;
-                           },
-                        }
-                     }
-                  },
-                  None => { println!("WARNING unrecognised pending exception {}",i); }
+               let exc = ArmException::from_exception_number(i as u32).unwrap();
+               if maybe_taken.is_none(){
+                  maybe_taken = Some(exc);
+               }else if exc.priority_group(&self.scs) < maybe_taken.as_ref().unwrap().priority_group(&self.scs){
+                  maybe_taken = Some(exc);
                }
             },
             _ => {}
          }
       }
-      return None;
+
+      match maybe_taken{
+        Some(exc) =>{
+           if exc.priority_group(&self.scs) < self.execution_priority(self.primask,&self.scs){
+              match self.init_exception(exc){
+                 Ok(n) => {
+                    return n;
+                 },
+                 Err(derived_exc) => {
+                    dbg_ln!("error during exception entry {:?}",derived_exc);
+                    let current_priority = self.execution_priority(self.primask, &self.scs);
+                    if current_priority == -1 || current_priority == -2{
+                       self.lockup();
+                    }else{
+                       self.set_exc_pending(derived_exc.clone());
+                       if derived_exc.priority_group(&self.scs) < current_priority{
+                          let possible_err = format!("derived {:?} pending",derived_exc);
+                          match self.init_exception(derived_exc){
+                             Ok(n) => return n,
+                             Err(e) => {
+                                self.set_exc_pending(e);
+                                //dbg_ln!("failed to enter derived exception {} will lockup",possible_err);
+                                self.lockup();
+                             },
+                          }
+                       }
+                    }
+                    return None;
+                 },
+              }
+           }else{
+              return None;
+           }
+        },
+        None => {return None;},
+      }
    }
 
    fn init_exception(&mut self, exc_type: ArmException)->Result<Option<u32>,ArmException>{
@@ -549,11 +570,12 @@ impl System{
             self.trace.push_str(&format!("initialising {:?} exception",exc_type));
             self.trace.push('\n');
          }
+         //TODO once true async interrupts are supported check for late arriving async exceptions here
          self.save_context_frame(&exc_type)?;
          let offset = self.jump_to_exception(&exc_type)?;
          println!("exception offset: {:#x}",offset);
          self.offset_pc(offset)?;
-         println!("exception branched pc -> {:#x}",offset);
+         println!("{:?} exception entry successful branched pc -> {:#x}",exc_type,offset);
          return Ok(Some(self.get_ipsr()));
       }
    }
@@ -571,8 +593,15 @@ impl System{
       let next_instr_address = exc_type.return_address(self.registers.pc as u32,true);
 
       let offset = std::mem::size_of::<ProcessStackFrame>();
-      let frame_ptr = (sp - offset as u32) & !0x4;
-      self.set_sp(frame_ptr)?;
+      let maybe_frame_ptr = sp.checked_sub(offset as u32);
+
+      if maybe_frame_ptr.is_none(){
+         return Err(ArmException::HardFault("Stack Frame ptr overflowed during exception entry".into()));
+      }
+
+      //let frame_ptr = (sp - offset as u32) & !0x4;
+      let frame_ptr = maybe_frame_ptr.unwrap();
+      self.set_sp(frame_ptr & !0x4)?;
       write_memory(self,frame_ptr, into_arm_bytes(self.registers.generic[0]))?;
       write_memory(self,frame_ptr + 4, into_arm_bytes(self.registers.generic[1]))?;
       write_memory(self,frame_ptr + 8, into_arm_bytes(self.registers.generic[2]))?;
@@ -625,7 +654,7 @@ impl System{
       let handler_ptr = from_arm_bytes(load_memory::<4>(self, handler_addr)?);
       self.event_register = true;
       dbg_ln!("handler address: {:#x}, handler ptr: {:#x}",handler_addr,handler_ptr);
-      self.bx_interworking_pc_offset(handler_ptr)
+      self.blx_interworking_offset(handler_ptr)
    }
 
    fn get_npriv(&self)->bool{
@@ -746,7 +775,15 @@ impl System{
       self.breakpoints.retain(|brkpt| *brkpt != (addr as usize));
    }
 
+   pub fn is_locked_up(&self)->bool{
+      self.locked_up
+   }
+
    pub fn step(&mut self)->Result<i32, ArmException>{
+      if self.locked_up{
+         return Ok(0);
+      }
+
       let maybe_code: [u8;2] = load_thumb_instr(&self, self.registers.pc as u32)?;
       let instr_size = instruction_size(maybe_code);
       match instr_size{
@@ -1668,6 +1705,7 @@ impl System{
    }
 
    pub fn reset(&mut self){
+      self.locked_up = false;
       self.mode = Mode::Thread;
       self.reset_ipsr();
       self.primask = false;

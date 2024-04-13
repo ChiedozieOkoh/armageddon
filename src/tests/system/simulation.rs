@@ -11,7 +11,7 @@ use crate::system::registers::{get_overflow_bit, get_carry_bit};
 use crate::tests::asm::{write_asm, asm_file_to_elf, asm_file_to_elf_armv6m};
 use crate::tests::elf::{write_asm_make_elf, link_elf};
 use crate::tests::system::{run_script_on_remote_cpu, parse_gdb_output, print_states};
-use crate::system::{ArmException, System, ExceptionStatus, Mode};
+use crate::system::{ArmException, System, ExceptionStatus, Mode, SystemControlSpace};
 use crate::elf::decoder::{to_native_endianness_32b, ElfError, get_string_table_section_hdr, is_symbol_table_section_hdr, get_section_symbols, get_loadable_sections, load_sections, get_all_symbol_names, SymbolDefinition, LiteralPools};
 use crate::to_arm_bytes;
 use super::{gdb_script, PROC_VARIABLES};
@@ -1189,6 +1189,20 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
          assert_eq!(ArmException::PendSV.priority_group(&sys.scs),0b10);
          assert_eq!(sys.scs.shpr3 & 1 << 31,1 << 31);
          assert_eq!(sys.scs.shpr3 & 1 << 23,1 << 23);
+
+         
+
+         
+         sys.registers.sp_main = 1 << 15; // dummy SP
+         sys.registers.sp_process = 1 << 15;// dummy SP
+         sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize] = ExceptionStatus::Pending;
+         sys.active_exceptions[ArmException::SysTick.number() as usize] = ExceptionStatus::Pending;
+
+         let _ = sys.check_for_exceptions();
+
+         println!("{:?}",sys.active_exceptions);
+         assert!(matches!(sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize],ExceptionStatus::Active));
+         assert!(matches!(sys.active_exceptions[ArmException::SysTick.number() as usize],ExceptionStatus::Pending));
          Ok(())
       }
    )?;
