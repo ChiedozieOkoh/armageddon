@@ -145,44 +145,49 @@ macro_rules! parse_hex_or_base10 {
    }
 }
 
-fn stringify_slice(arr: &[u8],cast: Cast)->String{
+fn stringify_slice(mut offset: u32, arr: &[u8], cast: Cast)->String{
    let mut display = String::new();
    match cast{
       Cast::UWORD => {
          for word in arr.chunks_exact(4){
             let byte_pair: [u8;4] = word.try_into().expect("always 4 byte arr");
             let native = from_arm_bytes(byte_pair);
-            display.push_str(&(native).to_string());
-            display.push(' ');
+            display.push_str(&format!("{:#010X}: {}\n",offset,native));
+            offset += 4;
          }
       },
       Cast::IWORD => {
          for word in arr.chunks_exact(4){
             let byte_pair: [u8;4] = word.try_into().expect("always 4 byte arr");
             let native = from_arm_bytes(byte_pair);
-            display.push_str(&(native as i32).to_string());
-            display.push(' ');
+            display.push_str(&format!("{:#010X}: {}\n",offset,native as i32));
+            offset += 4;
          }
       },
       Cast::UHALF => {
          for hw in arr.chunks_exact(2){
             let byte_pair: [u8;2] = hw.try_into().expect("always 2 byte arr");
             let native = from_arm_bytes_16b(byte_pair);
-            display.push_str(&(native).to_string());
-            display.push(' ');
+            display.push_str(&format!("{:#010X}: {}\n",offset,native as u16));
+            offset += 2;
          }
      },
       Cast::IHALF => for hw in arr.chunks_exact(2){
          let byte_pair: [u8;2] = hw.try_into().expect("always 2 byte arr");
          let native = from_arm_bytes_16b(byte_pair);
-         display.push_str(&(native as i16).to_string());
-         display.push(' ');
+            display.push_str(&format!("{:#010X}: {}\n",offset,native as i16));
+            offset += 2;
       },
-      Cast::UBYTE => display = format!("{:?}",arr),
+      Cast::UBYTE => {
+         for byte in arr{
+            display.push_str(&format!("{:#010X}: {}\n",offset,*byte));
+            offset += 1;
+         }
+      }
       Cast::IBYTE => {
          for byte in arr{
-            display.push_str(&(*byte as i8).to_string());
-            display.push(' ');
+            display.push_str(&format!("{:#010X}: {}\n",offset,*byte as i8));
+            offset += 1;
          }
       },
    }
@@ -628,7 +633,7 @@ fn pane_render<'a>(
 
                         //let data = &sys.memory[real_start ..= real_end];
                         let data = sys.alloc.view(real_start,real_end);
-                        let string_data = stringify_slice(&data, view.view_cast.clone());
+                        let string_data = stringify_slice(real_start,&data, view.view_cast.clone());
                         scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
                      },
                      Err(_) => {
@@ -1171,11 +1176,12 @@ impl Application for App{
       cmd
     }
 
+
    fn view(&self) -> iced::Element<'_, Self::Message, iced::Renderer> {
       let pane_buttons = pane_cmds(self.n_panes,self.focused_pane.clone());
       let layout = PaneGrid::new(&self._state, |id, pane, _maximised|{
          let is_focused = id == self.focused_pane;
-         let title_bar = pane_grid::TitleBar::new("Armageddon").padding(10).style(if is_focused{focused_pane}else{normal_pane});
+         let title_bar = pane_titles(pane,is_focused);
          pane_grid::Content::new(
             pane_render(&self,pane)
          ).title_bar(title_bar)
@@ -1210,6 +1216,26 @@ fn searchbar<'a>(bar: &'a SearchBar)->iced::Element<'a,Event>{
    row![next,input,close].into()
 }
 
+fn pane_titles(kind: &PaneType, focused: bool) -> pane_grid::TitleBar<Event> {
+   match &kind{
+      PaneType::Disassembler =>{
+         pane_grid::TitleBar::new("Armageddon (disassembly)")
+            .padding(10).style(if focused{focused_pane}else{normal_pane})
+      } ,
+      PaneType::SystemState => {
+         pane_grid::TitleBar::new("Armageddon (registers)")
+            .padding(10).style(if focused{focused_pane}else{normal_pane})
+      },
+      PaneType::MemoryExplorer => {
+         pane_grid::TitleBar::new("Armageddon (memory viewer)")
+            .padding(10).style(if focused{focused_pane}else{normal_pane})
+      },
+      PaneType::Trace => {
+         pane_grid::TitleBar::new("Armageddon (execution trace)")
+            .padding(10).style(if focused{focused_pane}else{normal_pane})
+      },
+   }
+}
 /*pub enum Breakpoint{
    Create(usize),
    Delete(usize)
