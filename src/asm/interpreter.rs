@@ -19,39 +19,17 @@ impl<'a> SymbolTable<'a>{
       Self{symbols, cursor: 0}
    }
 
-   fn search_for_thumb_func(&self, address: usize)->Option<&String>{
-      if address % 2 == 0{
-         let thumb_address = address | 1;
-         let after_thumb = self.symbols.partition_point(|symbol| symbol.position > thumb_address);
-         let before_thumb = self.symbols.partition_point(|symbol| symbol.position < thumb_address);
-         for i in before_thumb .. after_thumb{
-            match self.symbols[i]._type{
-               SymbolType::Func => {return Some(&self.symbols[i].name)},
-               _ => {}
-            }
-         }
-         None
-      }else{
-         None
-      }
-   }
-   
    //TODO consider the case when multiple symbols have the same address value
    pub fn lookup(&mut self, address: usize)->Option<&String>{
       return self.progressive_lookup(address);
    }
    
-   fn find_thumb_func(&self, address: usize)->Option<&String>{
-      let thumb_address = address | 1;
-      let mut idx = self.symbols.partition_point(|sym| sym.position <= thumb_address);
-      idx -= 1;
-      while self.symbols[idx].position == thumb_address && idx != 0{
-         if matches!(self.symbols[idx]._type,SymbolType::Func){
-            return Some(&self.symbols[idx].name);
-         }
-         idx -= 1;
+   pub fn peek(&self, address: usize)->Option<&String>{
+      let maybe_sym = self.symbols.binary_search_by(|sym| sym.position.cmp(&address));
+      match maybe_sym{
+         Ok(s) => Some(&self.symbols[s].name),
+         Err(_) => None,
       }
-      None
    }
 
    fn progressive_lookup(&mut self, address: usize)->Option<&String>{
@@ -352,6 +330,10 @@ pub struct TextPosition{
 }
 
 pub fn find_string_position(string: &str, substring: &str)->Vec<TextPosition>{
+   if substring.is_empty(){
+      return Vec::new();
+   }
+
    let mut occurances = Vec::new();
    for (i,line) in string.lines().enumerate(){
       match line.find(substring){

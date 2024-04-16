@@ -396,6 +396,7 @@ fn pane_render<'a>(
          let text_widget: Row<Event>= if highlighted.contains("<"){
             row![text(highlighted).size(TEXT_SIZE).style(iced::color!(100,0,0))]
          }else if c_search_result.is_some_and(|sr| sr == line_number){
+            println!("for search term '{}'",app.searchbar.as_ref().unwrap().target);
             println!("current search result ptr {:?}",c_search_result);
             let current = sr_idx;
             let focused = app.searchbar.as_ref().unwrap().is_nth_term_focused(current);
@@ -762,7 +763,14 @@ impl Application for App{
                    }else{
                       None
                    }
-                }
+                },
+                iced::keyboard::KeyCode::Backspace=>{
+                   if matches!(status,iced::event::Status::Ignored){
+                      Some(Event::Ui(Gui::CloseFocusedPane))
+                   }else{
+                      None
+                   }
+                },
                 _ => None,
             },
             _ => None
@@ -867,6 +875,23 @@ impl Application for App{
          Event::Ui(Gui::ResizePane(pane_grid::ResizeEvent{split, ratio})) => {
             self._state.resize(&split,ratio);
          },
+
+         Event::Ui(Gui::CloseFocusedPane)=>{
+            if self.n_panes >= 2{
+               let old_focus = self.focused_pane.clone();
+               if let Some(other_pane) = self._state.adjacent(&self.focused_pane, pane_grid::Direction::Up){
+                  self.focused_pane = other_pane;
+               }else if let Some(other_pane) = self._state.adjacent(&self.focused_pane, pane_grid::Direction::Left){
+                  self.focused_pane = other_pane;
+               }else if let Some(other_pane) = self._state.adjacent(&self.focused_pane, pane_grid::Direction::Down){
+                  self.focused_pane = other_pane;
+               }else if let Some(other_pane) = self._state.adjacent(&self.focused_pane, pane_grid::Direction::Right){
+                  self.focused_pane = other_pane;
+               }
+               self._state.close(&old_focus);
+               self.n_panes -=1;
+            }
+         }
 
          Event::Ui(Gui::ClosePane(pane)) => {
             if pane.eq(&self.focused_pane){
@@ -1263,6 +1288,7 @@ pub enum Gui{
    ResizePane(pane_grid::ResizeEvent),
    FocusPane(pane_grid::Pane),
    ClosePane(pane_grid::Pane),
+   CloseFocusedPane,
    Exp(Explorer),
    SetBkptInput(String),
    SubmitBkpt,

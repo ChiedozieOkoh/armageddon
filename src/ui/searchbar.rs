@@ -65,7 +65,9 @@ impl SearchBar{
       match &self.focus{
          Some(f) => {
             match &self.occurances{
-               Occurance::Text(ref v) => Some(v[*f].clone()),
+               Occurance::Text(ref v) => {
+                  Some(v[*f].clone())
+               },
                Occurance::Bin(_) => todo!(),
             }
          },
@@ -100,6 +102,9 @@ impl SearchBar{
         Occurance::Bin(v) => v.len(),
       };
 
+      if len == 0 {
+         return None;
+      }
       match &mut self.focus{
          Some(i) => {
             let c = *i;
@@ -128,6 +133,7 @@ impl SearchBar{
    }
 
    pub fn find(&mut self,disasm: &str)->Result<(),SearchError>{
+      self.focus = None;
       match &self.kind{
          Kind::Code => {
             let places = find_string_position(disasm, &self.target);
