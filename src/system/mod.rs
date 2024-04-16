@@ -6,7 +6,7 @@ use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_se
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
 use crate::dbg_ln;
-use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply, xor, carry_flag, overflow_flag, ror, asr} ;
+use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply, xor, carry_flag, overflow_flag, ror, asr, add_with_carry, adc_flags} ;
 
 use self::instructions::{cond_passed, shift_left, shift_right};
 use self::registers::{Registers, Apsr, SpecialRegister, get_overflow_bit};
@@ -397,6 +397,10 @@ impl System{
    }
 
    pub fn offset_pc(&mut self, offset: i32 )->Result<(),ArmException>{
+      if self.locked_up{
+         dbg_ln!("in locked state, cannot advance pc");
+         return Ok(());
+      }
       let new_addr = Self::offset_read_pc(self.registers.pc as u32,offset)?;
       println!("pc {0}({0:x}) -> {1}({1:x})",self.registers.pc,new_addr);
       self.registers.pc = new_addr as usize;
@@ -510,11 +514,15 @@ impl System{
       for i in 0 .. self.active_exceptions.len(){
          match &self.active_exceptions[i]{
             ExceptionStatus::Pending => {
-               let exc = ArmException::from_exception_number(i as u32).unwrap();
-               if maybe_taken.is_none(){
-                  maybe_taken = Some(exc);
-               }else if exc.priority_group(&self.scs) < maybe_taken.as_ref().unwrap().priority_group(&self.scs){
-                  maybe_taken = Some(exc);
+               if i < 16 || (self.scs.is_nvic_interrupt_enabled(i as u32 - 16)){
+                  let exc = ArmException::from_exception_number(i as u32).unwrap();
+                  if maybe_taken.is_none(){
+                     maybe_taken = Some(exc);
+                  }else if exc.priority_group(&self.scs) < maybe_taken.as_ref().unwrap().priority_group(&self.scs){
+                     maybe_taken = Some(exc);
+                  }
+               }else{
+                  dbg_ln!("WARN: disabled interrupt {} cannot become active",i);
                }
             },
             _ => {}
@@ -803,6 +811,25 @@ impl System{
                self.trace.push('\n');
             }
             match code {
+               Opcode::_16Bit(B16::ADCS)=>{
+                  let (dest,other) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+                  let a = self.registers.generic[dest.0 as usize];
+                  let b = self.registers.generic[other.0 as usize];
+                  let (sum, flags) = adc_flags(
+                     a,
+                     b,
+                     carry_flag(self.xpsr)
+                  );
+                  
+                  self.registers.generic[dest.0 as usize] = sum;
+                  self.update_apsr(&flags);
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_16Bit(B16::ADD_Imm3)=>{
                   let (dest, src, imm3) = unpack_operands!(
                      operands,
@@ -908,6 +935,30 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                }
 
+               Opcode::_16Bit(B16::ANDS)=>{
+                  let (dest,other) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let a = self.registers.generic[dest.0 as usize];
+                  let b = self.registers.generic[other.0 as usize];
+                  let r = a & b;
+
+                  let flags = ConditionFlags{
+                     negative: r & 0x80000000 > 0,
+                     overflow: overflow_flag(self.xpsr),
+                     carry: carry_flag(self.xpsr),
+                     zero: r == 0
+                  };
+
+                  self.update_apsr(&flags);
+
+                  self.registers.generic[dest.0 as usize] = r;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_16Bit(B16::ASRS_Imm5) =>{
                   let (dest,src,imm5) = unpack_operands!(
                      operands,
@@ -953,6 +1004,7 @@ impl System{
 
                   self.registers.generic[dest.0 as usize] = result;
 
+                  self.update_apsr(&flags);
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1063,6 +1115,21 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::CMP_NEG_REG)=>{
+                  let (reg_a,reg_b) = unpack_operands!(
+                     operands,
+                     Operands::PureRegisterPair,
+                     a,b
+                  );
+
+                  let a = self.registers.generic[reg_a.0 as usize];
+                  let b = self.registers.generic[reg_b.0 as usize];
+                  let (_,flags) = adc_flags(a, b, false);
+
+                  self.update_apsr(&flags);
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_16Bit(B16::CMP_Imm8) => {
                   let (src, imm8) = unpack_operands!(
                      operands,
@@ -1114,6 +1181,7 @@ impl System{
                      a
                   );
                   self.primask = interrupt_flag;
+                  dbg_ln!("PRIMASK := {}",self.primask as u8);
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1329,6 +1397,36 @@ impl System{
                   let hw_bytes: [u8;2] = load_memory(&self, addr)?;
                   let hw = from_arm_bytes_16b(hw_bytes);
                   self.registers.generic[dest.0 as usize] = hw as u32;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LDR_SP_Imm8)=>{
+                  let (dest,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::LDR_Imm8,
+                     a,sp,c
+                  );
+
+                  let base = self.get_sp();
+                  let addr = base + offset.0; 
+                  let byte_4: [u8;4] = load_memory(&self,addr)?;
+                  let word = from_arm_bytes(byte_4);
+                  self.registers.generic[dest.0 as usize] = word;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LDRB_Imm5)=>{
+                  let (dest,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::LDR_Imm5,
+                     a,b,c
+                  );
+
+                  let base_addr = self.registers.generic[base.0 as usize] + offset.0;
+                  let v = load_memory::<1>(&self,base_addr)?;
+                  self.registers.generic[dest.0 as usize] = v[0] as u32;
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1624,8 +1722,11 @@ impl System{
                Opcode::_16Bit(B16::UNDEFINED)=>{
                   println!("WARN: execution of the UDF instructions will result in a hardfault");
                   return Err(ArmException::HardFault(String::from("execution of a UDF instruction is undefined")));
-               }
-               _ => todo!("{:?} has not been implemented yet",code)
+               },
+               _ => {todo!("{:?} not implemented yet",code)},
+               //Opcode::_32Bit(e) => {
+               //   panic!("decoded 32 bit instruction, but expected instruction size of 16bits");
+               //}
             } 
          },
          InstructionSize::B32 => {
@@ -1815,6 +1916,7 @@ impl System{
       let mut cur_priority: i32 = 4;
       let boosted_priority = if primask {0}else{4};
 
+      dbg_ln!("boosted priority = {}",boosted_priority);
       for (i,status) in self.active_exceptions.iter().enumerate(){
          match status{
             ExceptionStatus::Active => {
@@ -2260,23 +2362,19 @@ impl MemoryMappedRegister{
 
          MemoryMappedRegister::nvic_ispr =>{
             for i in 0 .. 32{
-               if sys.scs.is_nvic_interrupt_enabled(i as u32){
-                  if (v & (1 << i)) > 0{
-                     match sys.active_exceptions[16 + i]{
-                        ExceptionStatus::Active => {
-                           dbg_ln!("exception {} is already active ",16 + i);
-                           sys.active_exceptions[16 + i] = ExceptionStatus::ActiveAndPending;
-                        },
-                        ExceptionStatus::Inactive => {
-                           sys.active_exceptions[16 + i] = ExceptionStatus::Pending;
-                        },
-                        ExceptionStatus::ActiveAndPending | ExceptionStatus::Pending => {
-                           dbg_ln!("exception {} is already pending",16 + i);
-                        },
-                     }
+               if (v & (1 << i)) > 0{
+                  match sys.active_exceptions[16 + i]{
+                     ExceptionStatus::Active => {
+                        dbg_ln!("exception {} is already active ",16 + i);
+                        sys.active_exceptions[16 + i] = ExceptionStatus::ActiveAndPending;
+                     },
+                     ExceptionStatus::Inactive => {
+                        sys.active_exceptions[16 + i] = ExceptionStatus::Pending;
+                     },
+                     ExceptionStatus::ActiveAndPending | ExceptionStatus::Pending => {
+                        dbg_ln!("exception {} is already pending",16 + i);
+                     },
                   }
-               }else{
-                  dbg_ln!("WARN: cannot set disabled interrupt {} to PENDING",i);
                }
             }
          },

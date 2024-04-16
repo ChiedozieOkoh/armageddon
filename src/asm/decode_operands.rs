@@ -173,7 +173,7 @@ fn dbg_print(operands: &Operands)->String{
          let registers = get_set_bits(*list);
          fmt_register_list(registers)
       },
-      Operands::EnableInterupt(flag) => if *flag {String::from("CPSIE i")} else{String::from("CPSID i")},
+      Operands::EnableInterupt(flag) => if *flag {String::from("CPSID i")} else{String::from("CPSIE i")},
       _ => {
          let dbg_operands = format!("{:?}",operands);
          remove_everything_outside_brackets(&dbg_operands)
@@ -618,7 +618,7 @@ fn get_low_byte(hw: HalfWord)->Operands{
 }
 
 fn get_cps_operands(hw: HalfWord)->Operands{
-   let flat = (hw[0] & 0x10) == 0;
+   let flat = (hw[0] & 0x10) > 0;
    Operands::EnableInterupt(flat)
 }
 

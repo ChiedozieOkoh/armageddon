@@ -768,21 +768,17 @@ impl Application for App{
       let sim_runtime = iced::subscription::channel(0, 1, |mut output| async move {
          let (sndr, mut rcvr)  = iced_mpsc::channel(10);
          output.send(Event::Dbg(Debug::Connect(sndr))).await;
-         let mut continue_mode = false;
          let mut halt = None;
-         let mut exit = false;
          loop{
             match rcvr.select_next_some().await{
                Event::Ui(e) => panic!("invalid cmd sent to simulator loop {:?}",e),
                Event::Dbg(Debug::Reset)=>{
                   let mut sys = async_copy.lock().unwrap();
-                  continue_mode = false;
                   sys.reset();
                   halt = Some(HaltType::usercmd);
                }
 
                Event::Dbg(Debug::Halt(HaltType::usercmd)) => {
-                  continue_mode = false; 
                   halt = Some(HaltType::usercmd);
                },
 
@@ -797,15 +793,12 @@ impl Application for App{
                },
 
                Event::Dbg(Debug::Disconnect) => {
-                  if !exit{
-                     exit = true;
-                  }
                   if !output.is_closed(){
                      output.close_channel();
                   }
                },
                Event::Dbg(Debug::Continue) => {
-                  continue_mode = true;
+                  let mut continue_mode = true;
                   while continue_mode{
                      let mut sys = async_copy.lock().unwrap();
                      if sys.on_breakpoint(){
@@ -826,7 +819,6 @@ impl Application for App{
                               },
                               Event::Dbg(Debug::Disconnect) => {
                                  continue_mode = false;
-                                 exit = true;
                                  output.close_channel();
                               },
                               Event::Dbg(Debug::Reset)=>{

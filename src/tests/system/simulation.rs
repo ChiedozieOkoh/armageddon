@@ -1035,6 +1035,7 @@ pub fn nvic_test()->Result<(),std::io::Error>{
          .text
          STR r1,[r0, #0]
          STR r1,[r0, #0]
+         NOP
          STR r1,[r0, #0]
          STR r1,[r0, #0]
          STR r1,[r0, #0]
@@ -1062,21 +1063,28 @@ pub fn nvic_test()->Result<(),std::io::Error>{
          assert_eq!(sys.scs.is_nvic_interrupt_enabled(31),true);
          assert_eq!(sys.scs.enabled_interrupts,enabled_interrupts);
 
-         // should ignore attempts to trigger disabled interrupts
+         // disabled interrupts can be pending but cannot become active
          let nvic_ispr: u32 = 0xE000E200; 
-         let req_pending = !enabled_interrupts;
+         let req_pending = 1;
          sys.registers.generic[0] = nvic_ispr;
          sys.registers.generic[1] = req_pending;
 
          let i = sys.step()?;
+         let _ = sys.check_for_exceptions();
          sys.offset_pc(i)?;
 
-         for exc in sys.active_exceptions{
-            assert!(matches!(exc,ExceptionStatus::Inactive));
-         }
+         assert!(matches!(sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize],ExceptionStatus::Pending));
+
+         let i = sys.step()?;
+         let _ = sys.check_for_exceptions();
+         sys.offset_pc(i)?;
+         assert!(matches!(sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize],ExceptionStatus::Pending));
          
-         //should allow enabled interrupts to be triggered
-         let pending = 0xC0000003;
+
+         sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize] = ExceptionStatus::Inactive;
+
+         //should allow enabled interrupts to become pending
+         let pending = 0x80000002;
          sys.registers.generic[1] = pending;
 
          let i = sys.step()?;
@@ -1084,8 +1092,6 @@ pub fn nvic_test()->Result<(),std::io::Error>{
 
          assert!(matches!(sys.active_exceptions[16 + 31],ExceptionStatus::Pending));
          assert!(matches!(sys.active_exceptions[16 + 1],ExceptionStatus::Pending));
-         assert!(matches!(sys.active_exceptions[16 + 30],ExceptionStatus::Inactive));
-         assert!(matches!(sys.active_exceptions[16 + 0],ExceptionStatus::Inactive));
 
          //should allow pending enabled interrupts to be cleared
          let nvic_icpr = 0xE000E280;
@@ -1197,6 +1203,7 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
          sys.registers.sp_process = 1 << 15;// dummy SP
          sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize] = ExceptionStatus::Pending;
          sys.active_exceptions[ArmException::SysTick.number() as usize] = ExceptionStatus::Pending;
+         sys.scs.enabled_interrupts = 1;
 
          let _ = sys.check_for_exceptions();
 
@@ -1207,6 +1214,50 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
       }
    )?;
 
+   Ok(())
+}
+
+#[test]
+pub fn cps_test()->Result<(),std::io::Error>{
+   let code = b"
+      .thumb
+      .text
+      NOP 
+      CPSID i 
+      NOP
+      CPSIE i
+
+   ";
+
+   run_assembly_armv6m(
+      Path::new("sim_irq_de.s"),
+      code, 
+      |entry_point, code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+         sys.registers.sp_main = 1 << 15; // dummy SP
+         sys.registers.sp_process = 1 << 15;// dummy SP
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         sys.active_exceptions[17] = ExceptionStatus::Pending;
+         sys.scs.enabled_interrupts = 2;
+         let i = sys.step()?;
+         sys.check_for_exceptions();
+         sys.offset_pc(i)?;
+         assert!(matches!(sys.active_exceptions[17],ExceptionStatus::Pending));
+
+         let i = sys.step()?;
+         sys.check_for_exceptions();
+         sys.offset_pc(i)?;
+         assert!(matches!(sys.active_exceptions[17],ExceptionStatus::Pending));
+
+         let i = sys.step()?;
+         sys.check_for_exceptions();
+         sys.offset_pc(i)?;
+         assert!(matches!(sys.active_exceptions[17],ExceptionStatus::Active));
+         Ok(())
+      }
+   )?;
    Ok(())
 }
 

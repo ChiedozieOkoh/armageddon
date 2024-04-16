@@ -112,6 +112,17 @@ pub fn multiply(a: u32, b: u32)->(u32, bool, bool){
    return (sum,negative,zero);
 }
 
+pub fn adc_flags(a: u32, b: u32, carry: bool)->(u32,ConditionFlags){
+   let (sum,carry_out,overflow) = add_with_carry::<32>(a.into(), b.into(), carry as u32);
+   let flags = ConditionFlags{
+      negative: sum & 0x80000000 > 0,
+      carry: carry_out,
+      zero: sum == 0,
+      overflow
+   };
+   return (sum,flags);
+}
+
 pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-> (u32, bool, bool){
    let u_sum: u64 = (a.0 as u64) + (b.0 as u64) + (carry as u64);
    dbg_ln!("Usum= {} + {} + {} = {}({3:x})",(a.0),(b.0),(carry),u_sum);

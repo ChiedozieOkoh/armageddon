@@ -729,13 +729,13 @@ fn should_recognise_cps()->Result<(),std::io::Error>{
    let disable: Opcode = ([bytes[2],bytes[3]]).into();
 
    if let Some(Operands::EnableInterupt(flag)) = get_operands(&Opcode::_16Bit(B16::CPS), [bytes[0],bytes[1]]){
-      assert_eq!(flag,true);
+      assert_eq!(flag,false);
    }else{
       panic!("could not parse CPS");
    }
 
    if let Some(Operands::EnableInterupt(flag)) = get_operands(&Opcode::_16Bit(B16::CPS), [bytes[2],bytes[3]]){
-      assert_eq!(flag,false);
+      assert_eq!(flag,true);
    }else{
       panic!("could not parse CPS");
    }
