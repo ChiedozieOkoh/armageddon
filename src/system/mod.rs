@@ -2,10 +2,10 @@ use std::fmt::Display;
 
 use crate::asm::interpreter::print_instruction;
 use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
-use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32, from_arm_bytes_16b};
+use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32, from_arm_bytes_16b, BitField, sign_extend};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
-use crate::dbg_ln;
+use crate::{dbg_ln, to_arm_bytes};
 use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply, xor, carry_flag, overflow_flag, ror, asr, add_with_carry, adc_flags} ;
 
 use self::instructions::{cond_passed, shift_left, shift_right};
@@ -1115,6 +1115,13 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::BREAKPOINT)=>{
+                  self.add_breakpoint(self.read_raw_ir());
+                  dbg_ln!("HIT breakpoint must explicitally step_over()");
+
+                  return Ok(0);
+               }
+
                Opcode::_16Bit(B16::CMP_NEG_REG)=>{
                   let (reg_a,reg_b) = unpack_operands!(
                      operands,
@@ -1240,6 +1247,13 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::SUB_SP_Imm7)=>{
+                  let imm7 = unpack_operands!(operands,Operands::SP_SUB,a);
+                  let (sum,_) = subtract(self.get_sp(), imm7.0);
+                  self.set_sp(sum)?;
+                  return Ok(instr_size.in_bytes() as i32);
+               }
+
                Opcode::_16Bit(B16::SUB_REG) => {
                   let (dest,src,arg) = unpack_operands!(
                      operands,
@@ -1254,6 +1268,34 @@ impl System{
 
                   self.registers.generic[dest.0 as usize] = sum;
                   self.update_apsr(&flags);
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::SXTB)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let masked = self.registers.generic[src.0 as usize] & 0xFF;
+                  let extended = sign_extend_u32::<8>(masked);
+                  self.registers.generic[dest.0 as usize] = extended;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::SXTH)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let masked = self.registers.generic[src.0 as usize] & 0xFFFF;
+                  let extended = sign_extend_u32::<16>(masked);
+                  self.registers.generic[dest.0 as usize] = extended;
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1430,6 +1472,54 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::LDRB_REGS)=>{
+                  let (dest,base,offset_reg) = unpack_operands!(
+                     operands,
+                     Operands::LDR_REG,
+                     a,b,c
+                  );
+
+                  let offset = self.registers.generic[offset_reg.0 as usize];
+                  let base_addr = self.registers.generic[base.0 as usize] + offset;
+                  let v = load_memory::<1>(&self,base_addr)?;
+                  self.registers.generic[dest.0 as usize] = v[0] as u32;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LDRSB_REGS)=>{
+                  let (dest,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::LDR_REG,
+                     a,b,c
+                  );
+
+                  let off = self.registers.generic[offset.0 as usize];
+                  let base_addr = self.registers.generic[base.0 as usize] + off;
+                  let v = load_memory::<1>(&self,base_addr)?;
+                  let extended = sign_extend_u32::<8>(v[0] as u32);
+                  self.registers.generic[dest.0 as usize] = extended;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LDRSH_REGS)=>{
+                  let (dest,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::LDR_REG,
+                     a,b,c
+                  );
+
+                  let off = self.registers.generic[offset.0 as usize];
+                  let base_addr = self.registers.generic[base.0 as usize] + off;
+                  let v = load_memory::<2>(&self,base_addr)?;
+                  let word = from_arm_bytes_16b(v) as u32;
+                  let extended = sign_extend_u32::<16>(word);
+                  self.registers.generic[dest.0 as usize] = extended as u32;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_16Bit(B16::LDR_PC_Imm8) => {
                   let (dest,src,offset) = unpack_operands!(
                      operands,
@@ -1441,6 +1531,22 @@ impl System{
                   let addr = Self::offset_read_pc(self.read_pc_word_aligned(), offset.0 as i32)?;
                   let value = load_memory::<4>(&self, addr)?;
                   self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::LDRH_REGS)=> {
+                  let (dest,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::LDR_REG,
+                     a,b,c
+                  );
+
+                  let offset = self.registers.generic[offset.0 as usize];
+                  let base_addr = self.registers.generic[base.0 as usize] + offset;
+                  let v = load_memory::<2>(&self, base_addr)?;
+                  let short = from_arm_bytes_16b(v);
+                  self.registers.generic[dest.0 as usize] = short as u32;
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1537,6 +1643,33 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::SBC)=>{
+                  let (dest,arg) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+                  
+                  let a = self.registers.generic[dest.0 as usize];
+                  let b = self.registers.generic[arg.0 as usize];
+                  let (sum,flags) = adc_flags(a, !b, carry_flag(self.xpsr));
+
+                  self.registers.generic[dest.0 as usize] = sum;
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::SEV)=>{
+                  self.event_register = true;
+
+                  if self.trace_enabled{
+                     self.trace.push_str("==SEV set event register==\n");
+                  }
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+               
                Opcode::_16Bit(B16::STR_Imm5) => {
                   let (v_reg,base,offset) = unpack_operands!(
                      operands,
@@ -1550,6 +1683,103 @@ impl System{
 
                   println!("*(&int({:#x})) := {}",addr,val);
                   write_memory::<4>(self, addr, into_arm_bytes(val))?;
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STR_Imm8)=>{
+                  let (src,offset) = unpack_operands!(
+                     operands,
+                     Operands::STR_Imm8,
+                     a,b
+                  );
+
+                  let addr = self.get_sp() + offset.0;
+                  let val = self.registers.generic[src.0 as usize];
+                  println!("*(&int({:#x})) := {}",addr,val);
+                  write_memory::<4>(self,addr, into_arm_bytes(val))?;
+                  
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STR_REG)=>{
+                  let (src,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::STR_REG,
+                     a,b,c
+                  );
+                  let base_v = self.registers.generic[base.0 as usize];
+                  let offset_v = self.registers.generic[offset.0 as usize];
+                  let addr = base_v + offset_v;
+                  let v = self.registers.generic[src.0 as usize];
+
+                  write_memory::<4>(self,addr,into_arm_bytes(v))?;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STRB_Imm5)=>{
+                  let (src,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::STR_Imm5,
+                     a,b,c
+                  );
+
+                  let base_v = self.registers.generic[base.0 as usize];
+                  let addr = base_v + (offset.0 as u32);
+                  let v = (self.registers.generic[src.0 as usize] & 0xFF) as u8;
+
+                  write_memory::<1>(self,addr,[v])?;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STRB_REG)=>{
+                  let (src,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::STR_REG,
+                     a,b,c
+                  );
+
+                  let base_v = self.registers.generic[base.0 as usize];
+                  let offset_v = self.registers.generic[offset.0 as usize];
+                  let addr = base_v + offset_v;
+                  let v = (self.registers.generic[src.0 as usize] & 0xFF) as u8;
+
+                  write_memory::<1>(self,addr,[v])?;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STRH_Imm5)=>{
+                  let (src,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::STR_Imm5,
+                     a,b,c
+                  );
+
+                  let base_v = self.registers.generic[base.0 as usize];
+                  let addr = base_v + (offset.0 as u32);
+                  let v = (self.registers.generic[src.0 as usize] & 0xFFFF) as u16;
+
+                  write_memory::<2>(self,addr,to_arm_bytes!(u16,v))?;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::STRH_REG)=>{
+                  let (src,base,offset) = unpack_operands!(
+                     operands,
+                     Operands::STR_REG,
+                     a,b,c
+                  );
+
+                  let base_v = self.registers.generic[base.0 as usize];
+                  let offset_v = self.registers.generic[offset.0 as usize];
+                  let addr = base_v + offset_v;
+                  let v = (self.registers.generic[src.0 as usize] & 0xFFFF) as u16;
+
+                  write_memory::<2>(self,addr,to_arm_bytes!(u16,v))?;
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1588,6 +1818,55 @@ impl System{
                         Err(ArmException::Svc)
                      }
                   }
+               },
+
+               Opcode::_16Bit(B16::TST)=>{
+                  let (a,b) = unpack_operands!(
+                     operands,
+                     Operands::PureRegisterPair,
+                     a,b
+                  );
+
+                  let va = self.registers.generic[a.0 as usize];
+                  let vb = self.registers.generic[b.0 as usize];
+                  let r = va & vb;
+
+                  let flags = ConditionFlags{
+                     negative: r & 0x80000000 > 0,
+                     overflow: overflow_flag(self.xpsr),
+                     carry: carry_flag(self.xpsr),
+                     zero: r == 0
+                  };
+
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::UXTB)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let v = self.registers.generic[src.0 as usize] & 0xFF;
+                  self.registers.generic[dest.0 as usize] = v;
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_16Bit(B16::UXTH)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let v = self.registers.generic[src.0 as usize] & 0xFFFF;
+                  self.registers.generic[dest.0 as usize] = v;
+
+                  return Ok(instr_size.in_bytes() as i32);
                },
 
                Opcode::_16Bit(B16::PUSH) => {
@@ -1706,6 +1985,22 @@ impl System{
                   return Ok(instr_size.in_bytes() as i32);
                },
 
+               Opcode::_16Bit(B16::RSB)=>{
+                  let (dest,src) = unpack_operands!(
+                     operands,
+                     Operands::RegisterPair,
+                     a,b
+                  );
+
+                  let v = self.registers.generic[src.0 as usize];
+                  let (sum, flags) = adc_flags(!v, 0, true);
+
+                  self.registers.generic[dest.0 as usize] = sum;
+                  self.update_apsr(&flags);
+
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_16Bit(B16::NOP) => {
                   return Ok(instr_size.in_bytes() as i32);
                },
@@ -1718,15 +2013,27 @@ impl System{
                      return Ok(0_i32);
                   }
                },
+
+               Opcode::_16Bit(B16::WFI)=>{
+                  if self.scs.wfi_wake_up{
+                     self.scs.wfi_wake_up = false;
+                     return Ok(instr_size.in_bytes() as i32);
+                  }else{
+                     return Ok(0);
+                  }
+               },
+
+               Opcode::_16Bit(B16::YIELD)=>{
+                  return Ok(instr_size.in_bytes() as i32);
+               },
                
                Opcode::_16Bit(B16::UNDEFINED)=>{
                   println!("WARN: execution of the UDF instructions will result in a hardfault");
                   return Err(ArmException::HardFault(String::from("execution of a UDF instruction is undefined")));
                },
-               _ => {todo!("{:?} not implemented yet",code)},
-               //Opcode::_32Bit(e) => {
-               //   panic!("decoded 32 bit instruction, but expected instruction size of 16bits");
-               //}
+               Opcode::_32Bit(e) => {
+                  panic!("decoded 32 bit instruction ({}), but expected instruction size of 16bits",e);
+               }
             } 
          },
          InstructionSize::B32 => {
@@ -1826,6 +2133,15 @@ impl System{
       if self.trace_enabled{
          self.trace.push_str("====SYSTEM RESET OCCURED====\n");
       }
+   }
+
+   fn do_store<const T : usize>(&mut self, value: [u8;T], base: SrcRegister, offset: u32)->Result<(),ArmException>{
+      let base_v = self.registers.generic[base.0 as usize];
+      let addr = base_v + offset;
+
+      write_memory::<T>(self,addr,value)?;
+
+      return Ok(());
    }
 
    fn do_move(&mut self, dest: usize, value: u32)->Result<(),ArmException>{
@@ -2249,6 +2565,10 @@ impl MemoryMappedRegister{
       }
    }
 
+   pub fn sev_on_pend_enabled(scs: &SystemControlSpace)->bool{
+      scs.scr & 0x10 > 0
+   }
+
    pub fn update(&self, sys: &mut System, v: u32){
       match self{
          MemoryMappedRegister::icsr => { 
@@ -2256,6 +2576,7 @@ impl MemoryMappedRegister{
                let n = ArmException::Nmi.number();
                println!("write to ICSR.NMI_PEND_SET will trigger NMI");
                sys.active_exceptions[n as usize] = ExceptionStatus::Pending;
+               sys.scs.wfi_wake_up = true;
             }
 
             if 0x10000000 & v > 0{
@@ -2265,6 +2586,10 @@ impl MemoryMappedRegister{
                   ExceptionStatus::Inactive => {
                      dbg_ln!("write to ICSR.PendSV_SET ,PendSV is pending");
                      sys.active_exceptions[n as usize] = ExceptionStatus::Pending;
+                     if Self::sev_on_pend_enabled(&sys.scs){
+                        dbg_ln!("SEVONPEND == 1, event register will be set");
+                        sys.event_register = true;
+                     }
                   },
                   ExceptionStatus::Active => {
                      dbg_ln!("write to ICSR.PendSV_SET ,PendSV is active & pending");
@@ -2337,7 +2662,7 @@ impl MemoryMappedRegister{
             }
          },
          MemoryMappedRegister::scr => {
-            dbg_ln!("WARN: SCR is not implemented");
+            dbg_ln!("WARN: only SCR.SEVONPEND is implemented");
             sys.scs.scr = v;
          },
          MemoryMappedRegister::ccr => {
@@ -2361,6 +2686,7 @@ impl MemoryMappedRegister{
          },
 
          MemoryMappedRegister::nvic_ispr =>{
+            let mut max_pending_prio = None;
             for i in 0 .. 32{
                if (v & (1 << i)) > 0{
                   match sys.active_exceptions[16 + i]{
@@ -2370,12 +2696,41 @@ impl MemoryMappedRegister{
                      },
                      ExceptionStatus::Inactive => {
                         sys.active_exceptions[16 + i] = ExceptionStatus::Pending;
+
+                        if Self::sev_on_pend_enabled(&sys.scs){
+                           dbg_ln!("SEVONPEND == 1, event register will be set");
+                           sys.event_register = true;
+                        }
+                        
+                        let int_prio = sys.scs.nvic_priority_of(i as u32 + 16);
+                        max_pending_prio = match max_pending_prio{
+                            Some(v) => { Some(std::cmp::min(v,int_prio)) },
+                            None => Some(int_prio),
+                        };
                      },
                      ExceptionStatus::ActiveAndPending | ExceptionStatus::Pending => {
                         dbg_ln!("exception {} is already pending",16 + i);
                      },
                   }
                }
+            }
+
+            match max_pending_prio{
+                Some(pri) => {
+                   for (i,status) in sys.active_exceptions[..].iter().enumerate(){
+                      match status{
+                         ExceptionStatus::Active | ExceptionStatus::ActiveAndPending=>{
+                            let active = ArmException::from_exception_number(i as u32).unwrap();
+                            if pri < active.priority_group(&sys.scs){
+                               sys.scs.wfi_wake_up = true;
+                               break;
+                            }
+                         },
+                         _ => {}
+                      }
+                   }
+                },
+                None => {},
             }
          },
 
@@ -2406,6 +2761,7 @@ impl MemoryMappedRegister{
 
 pub struct SystemControlSpace{
    pub enabled_interrupts: u32,
+   pub wfi_wake_up: bool,
    pub icsr: u32,
    pub vtor: u32,
    pub aircr: u32,
@@ -2420,6 +2776,7 @@ impl SystemControlSpace{
    pub fn reset()->Self{
       Self { 
          enabled_interrupts: 0,
+         wfi_wake_up: true,
          icsr: 0,
          vtor: 0,
          aircr: 0,

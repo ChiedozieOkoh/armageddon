@@ -482,7 +482,7 @@ pub fn should_recognise_16bit_branch_instructions()->Result<(),std::io::Error>{
       "bgt _l13\n",
       "_l13:\n",
       "ble _l14\n",
-      "_l14:\n"
+      "_l14:\n",
    );
 
    write_asm(path, code.as_bytes())?;

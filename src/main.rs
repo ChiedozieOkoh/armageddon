@@ -84,6 +84,8 @@ fn gui_diasm(){
       sys.set_vtor(cli_arg.vtor_override.unwrap());
    }
 
+   sys.scs.wfi_wake_up = false;
+
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 
    for i in disasm.into_iter(){
