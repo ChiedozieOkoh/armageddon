@@ -1,5 +1,5 @@
 use crate::binutils::{BitField, clear_extra_64b};
-use crate::system::instructions::add_with_carry;
+use crate::system::instructions::{add_with_carry, asr, ConditionFlags};
 
 #[test] #[ignore]
 pub fn adc_should_detect_unsigned_overflow_with_carry_bit(){
@@ -35,6 +35,17 @@ pub fn adc_within_bound_is_normal(){
    assert_eq!(sum,3);
    assert_eq!(carry,false);
    assert_eq!(overflow,false);
+}
+
+#[test]
+pub fn  asr_test(){
+   let (sum,flags) = asr(0b11000, 4, true);
+
+   assert_eq!(sum,1);
+   assert_eq!(flags.negative,false);
+   assert_eq!(flags.zero,false);
+   assert_eq!(flags.carry,true);
+   assert_eq!(flags.overflow,true);
 }
 
 #[test]

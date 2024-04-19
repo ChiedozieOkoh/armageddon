@@ -504,7 +504,10 @@ fn branch_and_misc(bytes: Word)->B32{
       (0,0x3E | 0x3F) => B32::MRS,
       (2,0x7F) => B32::UNDEFINED,
       (0x5|0x7,_) => B32::BR_AND_LNK,
-      _ => unreachable!(),
+      _ => {
+         println!("WARN: un-recognised brach/misc encoding {:?}",bytes);
+         return B32::UNDEFINED;
+      },
    }
 }
 

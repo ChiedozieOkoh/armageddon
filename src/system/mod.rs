@@ -793,6 +793,7 @@ impl System{
       }
 
       let maybe_code: [u8;2] = load_thumb_instr(&self, self.registers.pc as u32)?;
+      dbg_ln!("XPSR before step: {:#x} ({})",from_arm_bytes(self.xpsr),from_arm_bytes(self.xpsr));
       let instr_size = instruction_size(maybe_code);
       match instr_size{
          InstructionSize::B16 => {
@@ -967,14 +968,15 @@ impl System{
                   );
 
                   let v = self.registers.generic[src.0 as usize];
+                  dbg_ln!("ASR  r{}:= {}({:#x}) asr #{}",dest.0,v,v,imm5.0);
                   let shift = if imm5.0 == 0{ 32 } else{imm5.0 };
                   let (result, flags) = asr(
                      v, 
                      shift,
-                     carry_flag(self.xpsr),
                      overflow_flag(self.xpsr)
                   );
 
+                  dbg_ln!("flags: {:?}",flags);
                   self.registers.generic[dest.0 as usize] = result;
                   self.update_apsr(&flags);
                   return Ok(instr_size.in_bytes() as i32);
@@ -998,7 +1000,6 @@ impl System{
                   let (result,flags) = asr(
                      v,
                      shift,
-                     carry_flag(self.xpsr),
                      overflow_flag(self.xpsr)
                   );
 
@@ -1775,9 +1776,16 @@ impl System{
 
                   let base_v = self.registers.generic[base.0 as usize];
                   let offset_v = self.registers.generic[offset.0 as usize];
-                  let addr = base_v + offset_v;
+                  let addr = match base_v.checked_add(offset_v){
+                    Some(a) => a,
+                    None => {
+                       println!("WARN: address calculation of STRH will wrap");
+                       base_v.wrapping_add(offset_v)
+                    },
+                };
                   let v = (self.registers.generic[src.0 as usize] & 0xFFFF) as u16;
 
+                  dbg_ln!("store expr: *(&int({:#x})) := {}",addr,v);
                   write_memory::<2>(self,addr,to_arm_bytes!(u16,v))?;
 
                   return Ok(instr_size.in_bytes() as i32);
@@ -2133,15 +2141,6 @@ impl System{
       if self.trace_enabled{
          self.trace.push_str("====SYSTEM RESET OCCURED====\n");
       }
-   }
-
-   fn do_store<const T : usize>(&mut self, value: [u8;T], base: SrcRegister, offset: u32)->Result<(),ArmException>{
-      let base_v = self.registers.generic[base.0 as usize];
-      let addr = base_v + offset;
-
-      write_memory::<T>(self,addr,value)?;
-
-      return Ok(());
    }
 
    fn do_move(&mut self, dest: usize, value: u32)->Result<(),ArmException>{

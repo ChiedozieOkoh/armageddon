@@ -141,7 +141,7 @@ pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-
    return ((result & 0xFFFFFFFF) as u32,carry_out,overflow);
 }
 
-pub fn asr(val: u32, ammount: u32,carry: bool, overflow: bool)->(u32,ConditionFlags){
+pub fn asr(val: u32, ammount: u32, overflow: bool)->(u32,ConditionFlags){
    let signed = val & 0x80000000 > 0;
    let signed_bits = u32::MAX << (32 - ammount);
    let result = if signed{
@@ -150,6 +150,7 @@ pub fn asr(val: u32, ammount: u32,carry: bool, overflow: bool)->(u32,ConditionFl
       val >> ammount
    };
 
+   let carry = (val & (1 << (ammount - 1))) > 0;
    let flags = ConditionFlags{
       negative: signed,
       zero: result == 0,

@@ -1517,25 +1517,125 @@ fn assert_states_match(sys: &System, state: &[u32; PROC_VARIABLES]){
    assert_eq!(sys.registers.pc,state[super::PC] as usize);
    assert_eq!(sys.xpsr,into_arm_bytes(state[super::XPSR]));
 }
+macro_rules! fail_log {
+    ($case:expr,$($msg:tt)*) => {
+       if !($case){
+          println!($($msg)*);
+       }
+    }
+}
 
 fn are_states_equal(sys: &System, state: &[u32; PROC_VARIABLES])->bool{
-   return (sys.registers.generic[0] == state[super::R0]) |
-      (sys.registers.generic[1] == state[super::R1]) |
-      (sys.registers.generic[2] == state[super::R2]) |
-      (sys.registers.generic[3] == state[super::R3]) |
-      (sys.registers.generic[4] == state[super::R4]) |
-      (sys.registers.generic[5] == state[super::R5]) |
-      (sys.registers.generic[6] == state[super::R6]) |
-      (sys.registers.generic[7] == state[super::R7]) |
-      (sys.registers.generic[8] == state[super::R8]) |
-      (sys.registers.generic[9] == state[super::R9]) |
-      (sys.registers.generic[10] == state[super::R10]) |
-      (sys.registers.generic[11] == state[super::R11]) |
-      (sys.registers.generic[12] == state[super::R12]) |
-      (sys.registers.sp_main == state[super::MSP]) |
-      (sys.registers.sp_process == state[super::PSP]) |
-      (sys.registers.lr == state[super::LR]) |
-      (sys.registers.pc == state[super::PC] as usize) |
+
+   fail_log!(
+      sys.registers.generic[0] == state[super::R0],
+      "r0 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[1] == state[super::R1],
+      "r1 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[2] == state[super::R2],
+      "r2 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[3] == state[super::R3],
+      "r3 doesnt match"
+   );
+   
+   fail_log!(
+      sys.registers.generic[4] == state[super::R4],
+      "r4 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[5] == state[super::R5],
+      "r5 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[6] == state[super::R6],
+      "r6 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[7] == state[super::R7],
+      "r7 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[8] == state[super::R8],
+      "r8 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[9] == state[super::R9],
+      "r9 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[10] == state[super::R10],
+      "r10 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[11] == state[super::R11],
+      "r11 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.generic[12] == state[super::R12],
+      "r12 doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.sp_main == state[super::MSP],
+      "MSP doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.sp_process == state[super::PSP],
+      "PSP doesnt match"
+   );
+
+   fail_log!(
+      sys.registers.lr == state[super::LR],
+      "LR doesnt match"
+   );
+
+   fail_log!(
+      (sys.registers.pc as u32) == state[super::PC],
+      "PC doesnt match"
+   );
+
+   fail_log!(
+      sys.xpsr == into_arm_bytes(state[super::XPSR]),
+      "XPSR doesnt match {:#x}(sim) != {:#x}(hw)",
+      from_arm_bytes(sys.xpsr),
+      state[super::XPSR]
+   );
+
+   return (sys.registers.generic[0] == state[super::R0]) && 
+      (sys.registers.generic[1] == state[super::R1]) &&
+      (sys.registers.generic[2] == state[super::R2]) &&
+      (sys.registers.generic[3] == state[super::R3]) &&
+      (sys.registers.generic[4] == state[super::R4]) &&
+      (sys.registers.generic[5] == state[super::R5]) &&
+      (sys.registers.generic[6] == state[super::R6]) &&
+      (sys.registers.generic[7] == state[super::R7]) && 
+      (sys.registers.generic[8] == state[super::R8]) &&
+      (sys.registers.generic[9] == state[super::R9]) &&
+      (sys.registers.generic[10] == state[super::R10]) &&
+      (sys.registers.generic[11] == state[super::R11]) &&
+      (sys.registers.generic[12] == state[super::R12]) &&
+      (sys.registers.sp_main == state[super::MSP]) &&
+      (sys.registers.sp_process == state[super::PSP]) &&
+      (sys.registers.lr == state[super::LR]) &&
+      (sys.registers.pc == state[super::PC] as usize) &&
       (sys.xpsr == into_arm_bytes(state[super::XPSR]));
 }
 
@@ -1611,12 +1711,12 @@ fn fuzzy_testsuite()->Result<(),ElfError>{
    let bin_path = Path::new("elf_samples/fuzzy/build/fuzzy.elf");
 
    let label = String::from("sim_testcase_init");
-   let script = gdb_script(&label);
-   println!("generated:\n {}",&script);
-   std::fs::write("elf_samples/fuzzy/dump_proc",&script).unwrap();
+   //let script = gdb_script(&label);
+   //println!("generated:\n {}",&script);
+   //std::fs::write("elf_samples/fuzzy/dump_proc",&script).unwrap();
 
    for _ in 0 .. 1{
-      create_fuzzy_test(bin_path)?;
+      //create_fuzzy_test(bin_path)?;
       let output = run_script_on_remote_cpu(
          "elf_samples/fuzzy/dump_proc",
          "elf_samples/fuzzy/build/fuzzy.elf"
@@ -1625,12 +1725,14 @@ fn fuzzy_testsuite()->Result<(),ElfError>{
       let states = parse_gdb_output(&output);
       let mut stages = output.split("<<-->>");
       let (mut sys,_) = load_code_with_sections("elf_samples/fuzzy/build/fuzzy.elf")?;
+      println!("hardware result {:?}",states);
       copy_inital_state(&mut sys, &states);
       //SPOOF VTOR value so it points to the ram table embeded by the pico SDK
       sys.set_vtor(0x10000100);
       
       for state in states.chunks_exact(PROC_VARIABLES){
          println!("{}",stages.next().unwrap());
+         println!("executing on {:#x}",sys.read_raw_ir());
          let cpu_state: &[u32; PROC_VARIABLES] = state
             .try_into()
             .expect("should be 18 registers");
