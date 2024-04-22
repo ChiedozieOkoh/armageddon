@@ -1706,17 +1706,43 @@ pub fn hardware_fibonacci()->Result<(),ElfError>{
    Ok(())
 }
 
+fn update_fuzzy_stats(total_tests: u32, total_fails: u32){
+   let stats_path = Path::new("elf_samples/fuzzy/stats");
+   let data = format!("total_tests: {}\nfails: {}\n",total_tests,total_fails);
+   let mut handle =  File::create(stats_path).unwrap();
+
+   handle.write_all(data.as_bytes()).unwrap();
+}
+
 #[test] #[ignore]
 fn fuzzy_testsuite()->Result<(),ElfError>{
    let bin_path = Path::new("elf_samples/fuzzy/build/fuzzy.elf");
 
+   let generate_new_case = true;
    let label = String::from("sim_testcase_init");
    //let script = gdb_script(&label);
    //println!("generated:\n {}",&script);
    //std::fs::write("elf_samples/fuzzy/dump_proc",&script).unwrap();
 
+   let stats_path = Path::new("elf_samples/fuzzy/stats");
+   let current_stats = std::fs::read_to_string(stats_path)?;
+   let mut rdr = current_stats.lines();
+   let first_line = rdr.next().unwrap();
+   let second_line = rdr.next().unwrap();
+
+   let n_tests = first_line.strip_prefix("total_tests:").unwrap().trim();
+   let n_fails = second_line.strip_prefix("fails:").unwrap().trim(); 
+
+   let mut test_count = u32::from_str_radix(n_tests, 10).unwrap();
+   let mut fail_count = u32::from_str_radix(n_fails, 10).unwrap();
+   std::mem::drop(rdr);
+
    for _ in 0 .. 1{
-      //create_fuzzy_test(bin_path)?;
+      if generate_new_case{
+         create_fuzzy_test(bin_path)?;
+         test_count += 1;
+      }
+
       let output = run_script_on_remote_cpu(
          "elf_samples/fuzzy/dump_proc",
          "elf_samples/fuzzy/build/fuzzy.elf"
@@ -1762,6 +1788,10 @@ fn fuzzy_testsuite()->Result<(),ElfError>{
                from_arm_bytes(sys.xpsr)
             ]);
             std::fs::write("elf_samples/fuzzy/failed/hardware_run",&output)?;
+            fail_count += 1;
+            if generate_new_case{
+               update_fuzzy_stats(test_count, fail_count);
+            }
             panic!("state inconsistency");
          }
 
@@ -1769,6 +1799,10 @@ fn fuzzy_testsuite()->Result<(),ElfError>{
       }
    }
 
+
+   if generate_new_case{
+      update_fuzzy_stats(test_count, fail_count);
+   }
    Ok(())
 }
 

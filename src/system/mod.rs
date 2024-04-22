@@ -1468,6 +1468,7 @@ impl System{
 
                   let base_addr = self.registers.generic[base.0 as usize] + offset.0;
                   let v = load_memory::<1>(&self,base_addr)?;
+                  dbg_ln!("loaded {} from &{:#x}",v[0],base_addr);
                   self.registers.generic[dest.0 as usize] = v[0] as u32;
 
                   return Ok(instr_size.in_bytes() as i32);
@@ -1729,6 +1730,7 @@ impl System{
                   let addr = base_v + (offset.0 as u32);
                   let v = (self.registers.generic[src.0 as usize] & 0xFF) as u8;
 
+                  dbg_ln!("store expr: *(&int({:#x})) := {}",addr,v);
                   write_memory::<1>(self,addr,[v])?;
 
                   return Ok(instr_size.in_bytes() as i32);

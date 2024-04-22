@@ -24,6 +24,7 @@ struct Args{
    pub sp_reset_val: Option<u32>,
    pub vtor_override: Option<u32>,
    pub entry_point_override: Option<u32>,
+   pub manual_boot: bool
 }
 
 #[derive(Debug)]
@@ -39,13 +40,17 @@ const HELP_MSG: &'static str =  concat!(
    "Usage: armageddon <FILE> <OPTIONS>\n",
    "-h,--help               show this message\n",
    "\n",
-   "--sp-reset-val=<HEX>    specify the stack pointer value asigned during a reset.\n",
-   "                        when this value is set via the CLI the entry_point of the ELF\n",
-   "                        will be assumed to point to the reset routine handler\n",
+   "--manual-boot           when this flag is passed the simulator will not execute the reset handler during startup\n",
+   "\n",
    "--vtor=<HEX>            override the default value used for the vtor register.\n",
    "                        this will also change the SP value use after a reset. the SP value will be a u32 loaded from the address\n",
    "                        pointed to by the VTOR\n",
-   "--entry_point=<HEX>     explicitly set the entry point \n"
+   "\n",
+   "--sp-reset-val=<HEX>    specify the stack pointer value asigned during a reset.\n",
+   "                        when this value is set via the CLI the entry_point of the ELF\n",
+   "                        will be assumed to point to the reset routine handler\n",
+   "\n",
+   "--entrypoint=<HEX>     explicitly set the entry point \n"
 );
 
 fn gui_diasm(){
@@ -85,6 +90,13 @@ fn gui_diasm(){
    }
 
    sys.scs.wfi_wake_up = false;
+
+   if !cli_arg.manual_boot{
+      println!("system boot type: RESET");
+      sys.reset();
+   }else{
+      println!("system boot type: MANUAL");
+   }
 
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 
@@ -137,10 +149,18 @@ fn parse_args(args: Vec<String>)->Result<Args,ParseErr>{
       None => {},
    }
 
-   let maybe_vtor = get_optional_hex(&args, "--vtor=")?;
-   let maybe_entry_point = get_optional_hex(&args, "--entry_point=")?;
 
-   Ok(Args { elf: maybe_file, sp_reset_val: reset_val, vtor_override: maybe_vtor, entry_point_override: maybe_entry_point })
+   let manual_boot = args.contains(&String::from("--manual-boot"));
+   let maybe_vtor = get_optional_hex(&args, "--vtor=")?;
+   let maybe_entry_point = get_optional_hex(&args, "--entrypoint=")?;
+
+   Ok(Args { 
+      elf: maybe_file,
+      sp_reset_val: reset_val,
+      vtor_override: maybe_vtor,
+      entry_point_override: maybe_entry_point,
+      manual_boot
+   })
 }
 
 fn cli_disasm(){
