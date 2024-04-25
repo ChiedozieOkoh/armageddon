@@ -246,12 +246,16 @@ pub fn should_do_mul()->Result<(),std::io::Error>{
          let mut sys = load_code_into_system(entry_point, code)?;
          sys.registers.generic[0] = 7;
          sys.registers.generic[1] = 3;
+         let carry = carry_flag(sys.xpsr);
+         let overflow = overflow_flag(sys.xpsr);
 
          sys.step()?;
 
          assert_eq!(sys.registers.generic[0], 21);
          assert!(!negative_flag(sys.xpsr));
          assert!(!zero_flag(sys.xpsr));
+         assert_eq!(carry_flag(sys.xpsr),carry);
+         assert_eq!(overflow_flag(sys.xpsr),overflow);
          return Ok(());
       }
    )?;
@@ -681,12 +685,12 @@ pub fn support_exceptions()->Result<(),std::io::Error>{
       assert_eq!(sys.registers.sp_process,sp_reset);
       assert_eq!(sys.get_ipsr(),0);
 
-      sys.step()?; //MOV r0, #56
+      let i = sys.step()?; //MOV r0, #56
       assert_eq!(sys.registers.generic[0],56);
       assert_eq!(sys.get_ipsr(),0);
 
       sys.active_exceptions[2] = ExceptionStatus::Pending;
-      sys.check_for_exceptions();
+      sys.check_for_exceptions(i);
       assert_eq!(sys.get_ipsr(),2);
       assert!(matches!(sys.mode,Mode::Handler));
 
@@ -796,7 +800,7 @@ pub fn exception_preemption_test()->Result<(),std::io::Error>{
          println!("pc before {:#x}",sys.read_raw_ir());
 
          sys.active_exceptions[11] = ExceptionStatus::Pending;
-         sys.check_for_exceptions();
+         sys.check_for_exceptions(i);
          assert_eq!(sys.get_ipsr(),11);
          assert!(matches!(sys.active_exceptions[11],ExceptionStatus::Active));
          assert!(matches!(sys.mode, Mode::Handler));
@@ -810,7 +814,7 @@ pub fn exception_preemption_test()->Result<(),std::io::Error>{
 
          
          sys.active_exceptions[2] = ExceptionStatus::Pending;
-         sys.check_for_exceptions();
+         sys.check_for_exceptions(i);
          assert!(matches!(sys.active_exceptions[2],ExceptionStatus::Active));
          assert_eq!(sys.get_ipsr(),2);
          assert!(matches!(sys.mode, Mode::Handler));
@@ -1070,13 +1074,13 @@ pub fn nvic_test()->Result<(),std::io::Error>{
          sys.registers.generic[1] = req_pending;
 
          let i = sys.step()?;
-         let _ = sys.check_for_exceptions();
+         let _ = sys.check_for_exceptions(i);
          sys.offset_pc(i)?;
 
          assert!(matches!(sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize],ExceptionStatus::Pending));
 
          let i = sys.step()?;
-         let _ = sys.check_for_exceptions();
+         let _ = sys.check_for_exceptions(i);
          sys.offset_pc(i)?;
          assert!(matches!(sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize],ExceptionStatus::Pending));
          
@@ -1205,7 +1209,7 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
          sys.active_exceptions[ArmException::SysTick.number() as usize] = ExceptionStatus::Pending;
          sys.scs.enabled_interrupts = 1;
 
-         let _ = sys.check_for_exceptions();
+         let _ = sys.check_for_exceptions(i);
 
          println!("{:?}",sys.active_exceptions);
          assert!(matches!(sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize],ExceptionStatus::Active));
@@ -1242,17 +1246,17 @@ pub fn cps_test()->Result<(),std::io::Error>{
          sys.active_exceptions[17] = ExceptionStatus::Pending;
          sys.scs.enabled_interrupts = 2;
          let i = sys.step()?;
-         sys.check_for_exceptions();
+         sys.check_for_exceptions(i);
          sys.offset_pc(i)?;
          assert!(matches!(sys.active_exceptions[17],ExceptionStatus::Pending));
 
          let i = sys.step()?;
-         sys.check_for_exceptions();
+         sys.check_for_exceptions(i);
          sys.offset_pc(i)?;
          assert!(matches!(sys.active_exceptions[17],ExceptionStatus::Pending));
 
          let i = sys.step()?;
-         sys.check_for_exceptions();
+         sys.check_for_exceptions(i);
          sys.offset_pc(i)?;
          assert!(matches!(sys.active_exceptions[17],ExceptionStatus::Active));
          Ok(())
@@ -1643,19 +1647,28 @@ fn are_states_equal(sys: &System, state: &[u32; PROC_VARIABLES])->bool{
 fn step(sys: &mut System ){
    match sys.step(){
       Ok(offset) => {
-         if sys.check_for_exceptions().is_none(){
+         if sys.check_for_exceptions(offset).is_none(){
             match sys.offset_pc(offset){
                 Ok(_) => {},
                 Err(e) => {
+
+                   let offset = match e{
+                      ArmException::Svc => 2,
+                      _ => 0
+                   };
                    sys.set_exc_pending(e);
-                   let _ = sys.check_for_exceptions();
+                   let _ = sys.check_for_exceptions(offset);
                 },
             }
          }
       },
       Err(e)=>{
+         let offset = match e{
+             ArmException::Svc => 2,
+             _ => 0
+         };
          sys.set_exc_pending(e);
-         let _ = sys.check_for_exceptions();
+         let _ = sys.check_for_exceptions(offset);
       }
    }
 }

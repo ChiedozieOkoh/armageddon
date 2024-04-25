@@ -509,7 +509,7 @@ impl System{
       }
    }
 
-   pub fn check_for_exceptions(&mut self)->Option<u32>{
+   pub fn check_for_exceptions(&mut self,offset: i32)->Option<u32>{
       let mut maybe_taken: Option<ArmException> =  None; 
       for i in 0 .. self.active_exceptions.len(){
          match &self.active_exceptions[i]{
@@ -532,7 +532,7 @@ impl System{
       match maybe_taken{
         Some(exc) =>{
            if exc.priority_group(&self.scs) < self.execution_priority(self.primask,&self.scs){
-              match self.init_exception(exc){
+              match self.init_exception(exc,offset){
                  Ok(n) => {
                     return n;
                  },
@@ -545,7 +545,7 @@ impl System{
                        self.set_exc_pending(derived_exc.clone());
                        if derived_exc.priority_group(&self.scs) < current_priority{
                           let possible_err = format!("derived {:?} pending",derived_exc);
-                          match self.init_exception(derived_exc){
+                          match self.init_exception(derived_exc,offset){
                              Ok(n) => return n,
                              Err(e) => {
                                 self.set_exc_pending(e);
@@ -566,7 +566,7 @@ impl System{
       }
    }
 
-   fn init_exception(&mut self, exc_type: ArmException)->Result<Option<u32>,ArmException>{
+   fn init_exception(&mut self, exc_type: ArmException, offset: i32)->Result<Option<u32>,ArmException>{
       if self.execution_priority(self.primask,&self.scs) < exc_type.priority_group(&self.scs){
          println!("{:?} exception will remain pending",exc_type);
          self.active_exceptions[exc_type.number() as usize] = ExceptionStatus::Pending;
@@ -579,7 +579,7 @@ impl System{
             self.trace.push('\n');
          }
          //TODO once true async interrupts are supported check for late arriving async exceptions here
-         self.save_context_frame(&exc_type)?;
+         self.save_context_frame(&exc_type,offset)?;
          let offset = self.jump_to_exception(&exc_type)?;
          println!("exception offset: {:#x}",offset);
          self.offset_pc(offset)?;
@@ -588,7 +588,7 @@ impl System{
       }
    }
 
-   fn save_context_frame(&mut self,exc_type: &ArmException)->Result<(),ArmException>{
+   fn save_context_frame(&mut self,exc_type: &ArmException,offset: i32)->Result<(),ArmException>{
       let sp = self.get_sp();
       println!("SP on exception entry: {}",sp);
       let mut xpsr = from_arm_bytes(self.xpsr);
@@ -598,7 +598,7 @@ impl System{
          xpsr & (!(1 << 9))
       };
 
-      let next_instr_address = exc_type.return_address(self.registers.pc as u32,true);
+      let next_instr_address = exc_type.return_address(self.registers.pc as u32,offset,true);
 
       let offset = std::mem::size_of::<ProcessStackFrame>();
       let maybe_frame_ptr = sp.checked_sub(offset as u32);
@@ -679,7 +679,7 @@ impl System{
       self.registers.lr = from_arm_bytes(load_memory(self, frame_ptr + 20)?);
       let new_pc = from_arm_bytes(load_memory(self, frame_ptr + 24)?);
       if !is_aligned(new_pc, 2){
-         panic!("WTAF the pc value {:#x} onto the context frame is invalid",new_pc);
+         panic!("WTAF the pc value {:#x} in the context frame is invalid",new_pc);
       }
 
       self.registers.pc = new_pc as usize;
@@ -2413,8 +2413,13 @@ impl ArmException{
       }
    }
 
-   pub fn return_address(&self,current_address: u32, sync: bool)-> u32{
-      let next = (current_address + 2) & 0xFFFFFFFE;
+   pub fn return_address(&self,current_address: u32, offset: i32, sync: bool)-> u32{
+
+      let next: u32 = if offset.is_negative(){
+         current_address - (offset.wrapping_abs() as u32) & 0xFFFFFFFE
+      }else{
+         current_address + (offset as u32) & 0xFFFFFFFE
+      };
       println!("{:?}@{:#x} will return to {:#x}",&self,current_address,next);
       match self{
          ArmException::Reset => panic!("cannot return from reset exception"),

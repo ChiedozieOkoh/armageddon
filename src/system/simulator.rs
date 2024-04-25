@@ -18,15 +18,19 @@ impl Simulator{
    pub fn step_or_signal_halt(sys: &mut System)->Result<(),Debug>{
       match sys.step(){
          Ok(offset) => {
-            if sys.check_for_exceptions().is_none(){
+            if sys.check_for_exceptions(offset).is_none(){
                Self::halt_if_err(sys.offset_pc(offset))
             }else{
                return Ok(());
             }
          },
          Err(e) => {
+            let offset = match e{
+                ArmException::Svc => 2,
+                _ => 0
+            };
             sys.set_exc_pending(e);
-            sys.check_for_exceptions();
+            sys.check_for_exceptions(offset);
             return Ok(());
          },
       }
@@ -34,13 +38,13 @@ impl Simulator{
 
    pub fn register_exceptions(sys: &mut System, err: ArmException){
       sys.set_exc_pending(err);
-      sys.check_for_exceptions();
+      sys.check_for_exceptions(0);
    }
 
    pub fn step_or_signal_halt_type(sys: &mut System)->Result<(),HaltType>{
       match sys.step(){
          Ok(offset) => {
-            if sys.check_for_exceptions().is_none(){
+            if sys.check_for_exceptions(offset).is_none(){
                match sys.offset_pc(offset){
                   Ok(_) => Ok(()),
                   Err(ex) => Err(HaltType::error(ex)),
@@ -50,8 +54,12 @@ impl Simulator{
             }
          },
          Err(e) => {
+            let offset = match e{
+                ArmException::Svc => 2,
+                _ => 0
+            };
             sys.set_exc_pending(e);
-            sys.check_for_exceptions();
+            sys.check_for_exceptions(offset);
             return Ok(());
          },
       }

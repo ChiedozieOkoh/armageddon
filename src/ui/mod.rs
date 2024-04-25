@@ -839,6 +839,12 @@ impl Application for App{
                                  sys.reset();
                                  halt = Some(HaltType::usercmd);
                               },
+                              Event::Dbg(Debug::CreateBreakpoint(addr))=>{
+                                 sys.add_breakpoint(addr);
+                              },
+                              Event::Dbg(Debug::DeleteBreakpoint(addr))=>{
+                                 sys.remove_breakpoint(addr);
+                              },
                               Event::Dbg(e) => {
                                  panic!("invalid cmd {:?} sent to simulator loop", e)
                               },
