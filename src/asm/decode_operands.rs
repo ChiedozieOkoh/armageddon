@@ -128,12 +128,32 @@ impl fmt::Display for Operands{
     }
 }
 
-pub fn pretty_print(operands: &Operands)->String{
-   if cfg!(debug_assertions){
+pub fn hint_address(address: u32, offset: u32)->u32{
+   (address + 4 + offset) & !0x3
+}
+
+pub fn pretty_print(_address: u32, operands: &Operands)->String{
+   let mut line = if cfg!(debug_assertions){
       dbg_print(operands)
    }else{
       format!("{}", operands)
-   }
+   };
+   match operands{
+      Operands::LDR_Imm8(_,src,imm8) =>{
+         if src.0 == super::PROGRAM_COUNTER{
+            let hint = (_address + 4 + imm8.0) & !0x3 ;
+            line.push_str(&format!("    //@{:#010x}",hint));
+         }
+      },
+      Operands::LDR_Imm5(_,src,imm5) =>{
+         if src.0 == super::PROGRAM_COUNTER{
+            let hint = (_address + 4 + imm5.0) & !0x3 ;
+            line.push_str(&format!("    //@{:#010x}",hint));
+         }
+      },
+      _ => {}
+   } 
+   return line;
 }
 
 //TODO  finish whatever this thing was

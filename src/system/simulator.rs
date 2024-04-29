@@ -6,6 +6,7 @@ use crate::ui::Debug;
 #[derive(Clone,Debug)]
 pub enum HaltType{
    error(ArmException),
+   lockup,
    breakpoint,
    usercmd
 }
@@ -16,6 +17,9 @@ pub struct Simulator;
 //TODO consider having the step signal return the current ip address
 impl Simulator{
    pub fn step_or_signal_halt(sys: &mut System)->Result<(),Debug>{
+      if sys.is_locked_up(){
+         return Err(Debug::Halt(HaltType::lockup));
+      }
       match sys.step(){
          Ok(offset) => {
             if sys.check_for_exceptions(offset).is_none(){
@@ -42,6 +46,9 @@ impl Simulator{
    }
 
    pub fn step_or_signal_halt_type(sys: &mut System)->Result<(),HaltType>{
+      if sys.is_locked_up(){
+         return Err(HaltType::lockup);
+      }
       match sys.step(){
          Ok(offset) => {
             if sys.check_for_exceptions(offset).is_none(){

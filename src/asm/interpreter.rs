@@ -1,6 +1,6 @@
-use crate::{asm::decode::{Opcode,B16}, elf::decoder::{LiteralPools, SymbolDefinition, SymbolType}, binutils::{from_arm_bytes_16b, from_arm_bytes}};
+use crate::{asm::decode::{Opcode,B16}, elf::decoder::{LiteralPools, SymbolDefinition, SymbolType}, binutils::{from_arm_bytes_16b, from_arm_bytes}, conditional_branches};
 use crate::dbg_ln;
-use super::{decode_operands::{get_operands, pretty_print, get_operands_32b, Operands}, decode::{instruction_size, InstructionSize}};
+use super::{decode_operands::{get_operands, pretty_print, get_operands_32b, Operands}, decode::{instruction_size, InstructionSize, B32}};
 
 const INDENT: &str = "   ";
 
@@ -11,6 +11,36 @@ pub struct SymbolTable<'a>{
 
 pub fn is_segment_mapping_symbol(symbol: &str)->bool{
    symbol.eq("$d") || symbol.eq("$t")
+}
+
+pub fn peek(symbols: &Vec<SymbolDefinition>, address: usize)->Option<&String>{
+   let thumb = address | 1;
+   match symbols.binary_search_by(|sym|sym.position.cmp(&thumb)){
+     Ok(i) => {
+        if matches!(symbols[i]._type,SymbolType::Func){
+           return Some(&symbols[i].name);
+        }
+     },
+     Err(_) => {},
+   }
+   let maybe_sym = symbols.binary_search_by(|sym| sym.position.cmp(&address));
+   match maybe_sym{
+      Ok(s) => {
+         if symbols[s].name.eq("$t") || symbols[s].name.eq("$d"){
+            let mut i = s;
+            while i < symbols.len() && symbols[i].position == address{
+               if symbols[i].name.ne("$t") && symbols[i].name.ne("$d"){
+                  return Some(&symbols[i].name);
+               }
+               i += 1;
+            }
+            return None;
+         }else{
+            return Some(&symbols[s].name);
+         }
+      },
+      Err(_) => None,
+   }
 }
 
 impl<'a> SymbolTable<'a>{
@@ -24,13 +54,6 @@ impl<'a> SymbolTable<'a>{
       return self.progressive_lookup(address);
    }
    
-   pub fn peek(&self, address: usize)->Option<&String>{
-      let maybe_sym = self.symbols.binary_search_by(|sym| sym.position.cmp(&address));
-      match maybe_sym{
-         Ok(s) => Some(&self.symbols[s].name),
-         Err(_) => None,
-      }
-   }
 
    fn progressive_lookup(&mut self, address: usize)->Option<&String>{
       if self.cursor >= self.symbols.len(){
@@ -73,9 +96,9 @@ pub fn print_instruction(addr: u32,code: &Opcode, operands: &Option<Operands>)->
    let instruction = match operands{
       Some(args) => {
          if *code == Opcode::_16Bit(B16::CPS){
-            format!("{}{:#010x}:{}{}",INDENT,addr,INDENT,pretty_print(&args))
+            format!("{}{:#010x}:{}{}",INDENT,addr,INDENT,pretty_print(addr,&args))
          }else{
-            format!("{}{:#010x}:{}{} {}",INDENT,addr,INDENT,code,pretty_print(&args))
+            format!("{}{:#010x}:{}{} {}",INDENT,addr,INDENT,code,pretty_print(addr,&args))
          }
       },
       None => format!("{}{:#010x}:{}{}",INDENT,addr,INDENT,code)
@@ -84,11 +107,32 @@ pub fn print_instruction(addr: u32,code: &Opcode, operands: &Option<Operands>)->
    instruction
 }
 
+fn branch_disassemble(){
+}
+
+fn offset_addr(addr: u32, offset: i32)->u32{
+   if offset.is_negative(){
+      addr - (offset.wrapping_abs() as u32)
+   }else{
+      addr + (offset as u32)
+   }
+}
+
+macro_rules! branch_offset {
+   ($operand:path,$variant:expr) => {
+      match $variant{
+         $operand(v) => v,
+         _=> {panic!("could not decode {} operands",stringify!($operand))}
+      }
+   }
+}
+
 fn symbol_aware_disassemble(
    byte_offset :usize,
    code: Opcode,
    operands: Option<Operands>,
-   maybe_label: Option<&String>
+   maybe_label: Option<&String>,
+   symbols: &Vec<SymbolDefinition>
    )->String{
          let mut line = String::new();
          if let Some(label) = maybe_label{
@@ -98,10 +142,63 @@ fn symbol_aware_disassemble(
          }
          let instruction = match operands{
             Some(args) => {
-               if code == Opcode::_16Bit(B16::CPS){
-                  format!("{}{:#010x}:{}{}",INDENT,byte_offset,INDENT,pretty_print(&args))
-               }else{
-                  format!("{}{:#010x}:{}{} {}",INDENT,byte_offset,INDENT,code,pretty_print(&args))
+               match code{
+                  Opcode::_16Bit(B16::CPS) =>{
+                     format!("{}{:#010x}:{}{}",INDENT,byte_offset,INDENT,pretty_print(byte_offset as u32,&args))
+                  },
+                  Opcode::_16Bit(B16::B_ALWAYS)=>{
+                     let offset: i32 = branch_offset!(Operands::B_ALWAYS,args);
+                     if offset == 0{
+                        format!("{}{:#010x}:{}BAL .",INDENT,byte_offset,INDENT)
+                     }else{
+                        let target = offset_addr(byte_offset as u32, offset);
+                        let target_label = peek(symbols,target as usize);
+                        match target_label{
+                           Some(ref_label) => {
+                              format!("{}{:#010x}:{}BAL ({})",INDENT,byte_offset,INDENT,ref_label)
+                           },
+                           None => {
+                              format!("{}{:#010x}:{}{}{}    //@{:#010x}",INDENT,byte_offset,INDENT,code,pretty_print(byte_offset as u32,&args),target)
+                           }
+                        }
+                     }
+                  },
+
+                  conditional_branches!()=>{
+                     let offset: i32 = branch_offset!(Operands::COND_BRANCH,args);
+                     if offset == 0{
+                           format!("{}{:#010x}:{}{} .",INDENT,byte_offset,INDENT,code)
+                     }else{
+                        let target = offset_addr(byte_offset as u32, offset);
+                        let target_label = peek(symbols,target as usize);
+                        match target_label{
+                           Some(ref_label) => {
+                              format!("{}{:#010x}:{}{} ({})",INDENT,byte_offset,INDENT,code,ref_label)
+                           },
+                           None => {
+                              format!("{}{:#010x}:{}{}{}    //@{:#010x}",INDENT,byte_offset,INDENT,code,pretty_print(byte_offset as u32,&args),target)
+                           }
+                        }
+                     }
+                  },
+                  
+                  Opcode::_32Bit(B32::BR_AND_LNK)=>{
+                     let offset: i32 = branch_offset!(Operands::BR_LNK,args);
+                     let target = offset_addr(byte_offset as u32, offset);
+                     let target_label = peek(symbols,target as usize);
+                     match target_label{
+                        Some(ref_label) => {
+                           format!("{}{:#010x}:{}BL ({})",INDENT,byte_offset,INDENT,ref_label)
+                        },
+                        None => {
+                           format!("{}{:#010x}:{}{}{}    //@{:#010x}",INDENT,byte_offset,INDENT,code,pretty_print(byte_offset as u32,&args),target)
+                        },
+                     }
+                  },
+
+                  _ => {
+                     format!("{}{:#010x}:{}{} {}",INDENT,byte_offset,INDENT,code,pretty_print(byte_offset as u32,&args))
+                  }
                }
             },
             None => format!("{}{:#010x}:{}{}",INDENT,byte_offset,INDENT,code)
@@ -142,11 +239,11 @@ pub fn disasm_text(bytes: &[u8], section_offset: usize, symbols: &Vec<SymbolDefi
       symbols,
       |byte_offset,code,encoded_16b,label|{
          let maybe_args = get_operands(&code, encoded_16b);
-         symbol_aware_disassemble(byte_offset, code, maybe_args, label)
+         symbol_aware_disassemble(byte_offset, code, maybe_args, label,symbols)
       },
       |byte_offset,code,encoded_32b,label|{
          let maybe_args = get_operands_32b(&code, encoded_32b);
-         symbol_aware_disassemble(byte_offset, code, maybe_args, label)
+         symbol_aware_disassemble(byte_offset, code, maybe_args, label,symbols)
       },
       |byte_offset,pool,sym_table|{
          let symbol = sym_table.lookup(byte_offset);
@@ -207,11 +304,11 @@ pub fn print_assembly(bytes: &[u8],section_offset: usize, symbols: &Vec<SymbolDe
       symbols,
       |byte_offset,code,encoded_16b,label|{
          let maybe_args = get_operands(&code, encoded_16b);
-         symbol_aware_disassemble(byte_offset, code, maybe_args, label)
+         symbol_aware_disassemble(byte_offset, code, maybe_args, label,symbols)
       },
       |byte_offset,code,encoded_32b,label|{
          let maybe_args = get_operands_32b(&code, encoded_32b);
-         symbol_aware_disassemble(byte_offset, code, maybe_args, label)
+         symbol_aware_disassemble(byte_offset, code, maybe_args, label,symbols)
       },
       |byte_offset,pool,sym_table|{
          let symbol = sym_table.lookup(byte_offset);

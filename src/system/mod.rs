@@ -59,6 +59,7 @@ macro_rules! unpack_operands {
     }
 }
 
+#[macro_export]
 macro_rules! conditional_branches{
    () => {
       Opcode::_16Bit(B16::BEQ) 
@@ -2476,6 +2477,9 @@ enum MemoryMappedRegister{
    nvic_ispr,
    nvic_icpr,
    nvic_ipr(u8),
+   syst_csr,
+   syst_rvr,
+   syst_cvr,
    icsr,
    vtor,
    aircr,
@@ -2488,6 +2492,12 @@ enum MemoryMappedRegister{
 impl MemoryMappedRegister{
    pub fn from_address(address: u32)->Option<MemoryMappedRegister>{
       match address{
+         0xE000E010 =>{
+            Some(Self::syst_csr)
+         },
+         0xE000E014 =>{
+            Some(Self::syst_rvr)
+         },
          0xE000E100 =>{
             Some(Self::nvic_iser)
          },
@@ -2503,7 +2513,6 @@ impl MemoryMappedRegister{
          0xE000E400 ..= 0xE000E41C=>{
             let offset = address - 0xE000E400; 
             let index = offset / 4;
-            assert!(index >= 0);
             assert!(index < 8);
             Some(Self::nvic_ipr(index as u8))
          },
@@ -2531,7 +2540,10 @@ impl MemoryMappedRegister{
             Some(Self::shpr3)
          },
 
-         _ => todo!("WARN: {} PPB region has not been implemented yet",address)
+         _ => {
+            println!("WARN: {} has no associated system register in the PPB space",address);
+            None
+         }
       }
    }
 
@@ -2567,7 +2579,16 @@ impl MemoryMappedRegister{
          },
          MemoryMappedRegister::nvic_ipr(i)=>{
             sys.scs.ipr[*i as usize]
-         }
+         },
+         MemoryMappedRegister::syst_csr=>{
+            let mut csr = 4;
+            if sys.scs.unread_systick{ csr |= 0x10000; }
+            if sys.scs.tick_interrupt_isr{ csr |= 0b10};
+            if sys.scs.sys_timer_enabled{ csr |= 1 };
+            csr
+         },
+         MemoryMappedRegister::syst_rvr=>{sys.scs.clock_reset},
+         MemoryMappedRegister::syst_cvr=>{sys.scs.clock_value},
       }
    }
 
@@ -2760,7 +2781,23 @@ impl MemoryMappedRegister{
             dbg_ln!("writing {:#x} to IPR{}",v & 0xC0C0C0C0,i);
             let priority_bits = v & 0xC0C0C0C0;
             sys.scs.ipr[*i as usize] = priority_bits;
-         }
+         },
+
+         MemoryMappedRegister::syst_csr=>{
+            let enable_timer = (v & 1) > 0;
+            let enable_interrupt = (v & 0b10) > 0;
+            sys.scs.sys_timer_enabled = enable_timer;
+            sys.scs.tick_interrupt_isr = enable_interrupt;
+         },
+         
+         MemoryMappedRegister::syst_rvr=>{
+            sys.scs.clock_reset = v & 0x00FFFFFF;
+         },
+
+         MemoryMappedRegister::syst_cvr=>{
+            sys.scs.clock_value = 0;
+            sys.scs.unread_systick = true;
+         },
       }
    }
 }
@@ -2768,6 +2805,11 @@ impl MemoryMappedRegister{
 pub struct SystemControlSpace{
    pub enabled_interrupts: u32,
    pub wfi_wake_up: bool,
+   pub sys_timer_enabled: bool,
+   pub tick_interrupt_isr: bool,
+   pub unread_systick: bool,
+   pub clock_value: u32,
+   pub clock_reset: u32,
    pub icsr: u32,
    pub vtor: u32,
    pub aircr: u32,
@@ -2783,6 +2825,11 @@ impl SystemControlSpace{
       Self { 
          enabled_interrupts: 0,
          wfi_wake_up: true,
+         sys_timer_enabled: false,
+         tick_interrupt_isr: false,
+         unread_systick: false,
+         clock_value: 0,
+         clock_reset: 0,
          icsr: 0,
          vtor: 0,
          aircr: 0,
@@ -2796,6 +2843,18 @@ impl SystemControlSpace{
 
    pub fn set_vec_active(&mut self, exc_n: u32){
       self.icsr |= exc_n;
+   }
+
+   pub fn clock_tick(&mut self)->Result<(),ArmException>{
+      if self.clock_value == 0 && self.sys_timer_enabled && self.tick_interrupt_isr{
+         self.clock_value = self.clock_reset;
+         Err(ArmException::SysTick)
+      }else{
+         if self.sys_timer_enabled{
+            self.clock_value -= 1;
+         }
+         Ok(())
+      }
    }
 
    pub fn clear_vec_active(&mut self){
