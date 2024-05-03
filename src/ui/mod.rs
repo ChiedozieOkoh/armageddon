@@ -10,14 +10,16 @@ use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
 
 pub mod searchbar;
+pub mod window;
 
 pub struct App{
    _state: pane_grid::State<PaneType>,
    n_panes: usize,
    focused_pane: pane_grid::Pane,
-   diasm_win_id: iced::widget::scrollable::Id,
+   diasm_windows: Window,
    entry_point: usize,
    pub disasm: String,
+   register_hex_display: [bool;16],
    searchbar: Option<SearchBar>,
    symbols: Vec<SymbolDefinition>,
    mem_view: Option<MemoryView>,
@@ -368,6 +370,7 @@ fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextP
 
 fn pane_render<'a>(
    app: &App,
+   id: &pane_grid::Pane,
    state: &PaneType
    )->Element<'a, Event>{
    match state{
@@ -586,7 +589,7 @@ fn pane_render<'a>(
             text_box = text_box.push(text(&un_highlighted).size(TEXT_SIZE).width(iced::Length::Fill));
          }
          //let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill).style(iced::color!(100,0,0));
-         container(scrollable(text_box.spacing(0)).id(app.diasm_win_id.clone()))
+         container(scrollable(text_box.spacing(0)).id(app.diasm_windows.id_of(id).unwrap().clone()))
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
@@ -717,16 +720,18 @@ impl Application for App{
       sys.trace_enabled = true;
       let starting_view: SystemView = (&sys).into();
       let sync_sys_arc = Arc::new(Mutex::new(sys));
-      let disasm_id = iced::widget::scrollable::Id::unique();
+      let mut windows = Window::create();
+      windows.add_pane(def.clone());
       (Self{
          _state: state,
          focused_pane: def,
          n_panes: 1,
-         diasm_win_id: disasm_id,
+         diasm_windows: windows,
          sync_sys: sync_sys_arc,
          disasm: disassembly,
          entry_point,
          symbols,
+         register_hex_display: [false;16],
          sys_view: starting_view,
          cmd_sender: None,
          mem_view: None,
@@ -874,7 +879,17 @@ impl Application for App{
       let mut cmd = Command::none();
       match message{
          Event::Ui(Gui::SplitPane(pane,kind, axis)) => {
-            self._state.split(axis, &pane, kind);
+            if let Some(p) = self._state.split(axis, &pane, kind.clone()){
+               let (new_pane,_) = p;
+               match kind{
+                  PaneType::Disassembler => {
+                     let _  = self.diasm_windows.add_pane(new_pane.clone());
+                     self.diasm_windows.focus_if_present(&new_pane);
+                  },
+                  _ => {}
+               }
+               self.focused_pane = new_pane;
+            }
             self.n_panes += 1;
          },
 
@@ -894,6 +909,8 @@ impl Application for App{
                }else if let Some(other_pane) = self._state.adjacent(&self.focused_pane, pane_grid::Direction::Right){
                   self.focused_pane = other_pane;
                }
+               self.diasm_windows.focus_if_present(&self.focused_pane);
+               self.diasm_windows.remove_pane(&old_focus);
                self._state.close(&old_focus);
                self.n_panes -=1;
             }
@@ -911,11 +928,14 @@ impl Application for App{
                   self.focused_pane = other_pane;
                }
             }
+            self.diasm_windows.focus_if_present(&self.focused_pane);
+            self.diasm_windows.remove_pane(&pane);
             self._state.close(&pane);
             self.n_panes -= 1;
          },
 
          Event::Ui(Gui::FocusPane(pane))=>{
+            self.diasm_windows.focus_if_present(&pane);
             self.focused_pane = pane;
          },
 
@@ -941,8 +961,13 @@ impl Application for App{
                            position.line_number,
                            total_lines,
                            ratio
-                          );
-                   cmd = iced::widget::scrollable::snap_to(self.diasm_win_id.clone(), scrollable::RelativeOffset { x: 0.0, y: ratio });
+                   );
+                   if let Some(id) = self.diasm_windows.get_focused_pane(){
+                      cmd = iced::widget::scrollable::snap_to(
+                         id.clone(),
+                         scrollable::RelativeOffset { x: 0.0, y: ratio }
+                      );
+                   }
                 },
                 None => println!("no matches found"),
             }
@@ -984,7 +1009,13 @@ impl Application for App{
             }
             let y_ratio = (ir_ln as f32) / line_number as f32;
             dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,line_number,y_ratio);
-            cmd = iced::widget::scrollable::snap_to(self.diasm_win_id.clone(), scrollable::RelativeOffset { x: 0.0, y: y_ratio });
+            if let Some(id) = self.diasm_windows.get_focused_pane(){
+               println!("snapping to {:?}",id);
+               cmd = iced::widget::scrollable::snap_to(
+                  id.clone(),
+                  scrollable::RelativeOffset { x: 0.0, y: y_ratio }
+               );
+            }
          },
 
          Event::Ui(Gui::Exp(Explorer::Update)) => { 
@@ -1214,7 +1245,7 @@ impl Application for App{
          let is_focused = id == self.focused_pane;
          let title_bar = pane_titles(pane,is_focused);
          pane_grid::Content::new(
-            pane_render(&self,pane)
+            pane_render(&self,&id,pane)
          ).title_bar(title_bar)
       }.style(normal_pane))
       .on_resize(10,|e| Event::Ui(Gui::ResizePane(e)))
@@ -1275,7 +1306,7 @@ fn pane_titles(kind: &PaneType, focused: bool) -> pane_grid::TitleBar<Event> {
 use iced::futures::channel::mpsc as iced_mpsc;
 use iced::futures::sink::SinkExt;
 
-use self::searchbar::SearchBar; 
+use self::{searchbar::SearchBar, window::Window}; 
 #[derive(Debug,Clone)]
 pub enum Debug{
    Halt(HaltType),
