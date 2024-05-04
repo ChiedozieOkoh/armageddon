@@ -55,14 +55,19 @@ impl From<&System> for SystemView{
    }
 }
 
-fn inlay_button(label: String,on_click: Event, highlight: bool,components: Option<Element<'static,Event>>) -> iced::widget::MouseArea<'static,Event,iced::Renderer> {
-   if components.is_some(){
+fn inlay_button_ref(components: Element<'static,Event>,on_click: Event, highlight: bool) -> iced::widget::MouseArea<'static,Event,iced::Renderer> {
+   if highlight{
       return mouse_area(
-         container(
-            components.unwrap()
-         ).style(brkpt_theme)
+         container(components).style(brkpt_theme)
+      ).on_release(on_click);
+   }else{
+      return mouse_area(
+         container(components)
       ).on_release(on_click);
    }
+}
+
+fn inlay_button(label: String,on_click: Event, highlight: bool) -> iced::widget::MouseArea<'static,Event,iced::Renderer> {
    if highlight{
       mouse_area(
          container(
@@ -82,7 +87,7 @@ fn adjustable_register(reg_num: u32,name: &str, value: u32,in_hex: bool) -> Row<
       format!("  {}: {}",name,value)
    };
    row![
-   inlay_button(label,Event::Ui(Gui::ToggleRegisterDisplay(reg_num)),false,None)
+   inlay_button(label,Event::Ui(Gui::ToggleRegisterDisplay(reg_num)),false)
    ]
 }
 
@@ -443,181 +448,63 @@ fn pane_render<'a>(
          line_number += 1;
          let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![text_widget];
          text_box = text_box.spacing(0).padding(0).height(iced::Length::Shrink);
-         let mut un_highlighted = String::new();
 
          for line in app.disasm.lines().skip(1){
-            if line.contains("<"){
-               //if !un_highlighted.trim().is_empty(){
-                  text_box = text_box.push(
-                     text(&un_highlighted)
-                     .size(TEXT_SIZE)
-                     .width(iced::Length::Fill)
-                  );
-               //}
-               //
-                  let current = current_search_result(&search_results,sr_idx);
-                  let inner_text  = if current.is_some_and(|sr| sr == line_number){
-                     let focused = app.searchbar.as_ref()
-                        .unwrap()
-                        .is_nth_term_focused(sr_idx);
+            if !line.trim().is_empty(){
+               let offset = line.split(":").next().unwrap();
+               let addr = u32::from_str_radix(
+                  offset.trim().trim_start_matches("0x").trim(),
+                  16
+                  ).unwrap();
 
-                     let v = highlight_search_result(
-                        &app.searchbar.as_ref().unwrap().target,
-                        line,
-                        &search_results[sr_idx],
-                        focused,
-                        Some((
-                           iced::color!(100,0,0),
-                           iced::Font{
-                              .. Default::default()
-                           }))
-                        );
-                     sr_idx += 1;
-                     v
-                  }else{
-                     row![
-                        text(line)
-                           .size(TEXT_SIZE)
-                           .style(iced::color!(100,0,0))
-                           .width(iced::Length::Fill)
-                     ]
-                  };
-               text_box = text_box.push(
-                  inner_text
-               );
-               un_highlighted.clear();
-            }else{
-               if !line.trim().is_empty(){
-                  dbg_ln!("asm line ({})",line);
-                  let offset = line.split(":").next();
-                  match offset{
-                     Some(address) => {
-                        dbg_ln!("parsing hex ({})",address);
-                        let add_v = u32::from_str_radix(
-                           address.trim().trim_start_matches("0x").trim(),
-                           16
-                        ).unwrap();
-                        if add_v == ir{
-                           if !un_highlighted.trim().is_empty(){
-                              text_box = text_box.push(
-                                 text(&un_highlighted)
-                                 .size(TEXT_SIZE)
-                                 .width(iced::Length::Fill)
-                              );
-                           }
+               let on_symbol = line.contains("<");
+               let on_exec_intr = addr == ir;
+               let on_breakpoint = app.breakpoints.contains(&addr);
 
-                           let current = current_search_result(&search_results,sr_idx);
-                           let bold  = if current.is_some_and(|sr| sr == line_number){
-                              let focused = app.searchbar.as_ref()
-                                 .unwrap()
-                                 .is_nth_term_focused(sr_idx);
-
-                              let v = highlight_search_result(
-                                 &app.searchbar.as_ref().unwrap().target,
-                                 line,
-                                 &search_results[sr_idx],
-                                 focused,
-                                 Some((
-                                    iced::color!(0,0,0),
-                                    iced::Font{
-                                    weight: iced::font::Weight::Bold,
-                                    .. Default::default()}
-                                 ))
-                              );
-                              sr_idx += 1;
-                              v
-                           }else{
-                              row![
-                              text(line)
-                                 .size(TEXT_SIZE)
-                                 .width(iced::Length::Fill)
-                                 .font(iced::Font{
-                                    weight: iced::font::Weight::Bold,
-                                    .. Default::default()
-                                 })
-                              ]
-                           };
-
-                           text_box = text_box.push(
-                              bold
-                           );
-                           un_highlighted.clear();
-
-                        }else if app.breakpoints.contains(&add_v){
-                           if !un_highlighted.trim().is_empty(){
-                              text_box = text_box.push(
-                                 text(&un_highlighted)
-                                 .size(TEXT_SIZE)
-                                 .width(iced::Length::Fill)
-                              );
-                           }
-                           un_highlighted.clear();
-                           let current = current_search_result(&search_results,sr_idx);
-                           let brkpt_text = if current.is_some_and(|sr| sr == line_number){
-                              let focused = app.searchbar.as_ref()
-                                 .unwrap()
-                                 .is_nth_term_focused(sr_idx);
-
-                              let v = highlight_search_result(
-                                 &app.searchbar.as_ref().unwrap().target,
-                                 line,
-                                 &search_results[sr_idx],
-                                 focused,
-                                 None
-                              );
-                              sr_idx += 1;
-                              v
-                           }else{
-                              row![text(line).size(TEXT_SIZE)]
-                           };
-                           text_box = text_box.push(container(brkpt_text).style(brkpt_theme).padding(0));
-                        }else{
-                           let current = current_search_result(&search_results,sr_idx);
-                           if current.is_some_and(|sr| sr == line_number){
-                              if !un_highlighted.is_empty() {
-                                 un_highlighted.pop();
-                                 text_box = text_box.push(
-                                    text(&un_highlighted)
-                                    .size(TEXT_SIZE)
-                                    .width(iced::Length::Fill)
-                                    .height(iced::Length::Shrink)
-                                    ).padding(0);
-                                 un_highlighted.clear();
-                              }
-
-                              let focused = app.searchbar.as_ref()
-                                 .unwrap()
-                                 .is_nth_term_focused(sr_idx);
-
-                              text_box = text_box.push(
-                                 highlight_search_result(
-                                    &app.searchbar.as_ref().unwrap().target,
-                                    line,
-                                    &search_results[sr_idx],
-                                    focused,
-                                    None
-                                 )
-                              );
-                              sr_idx += 1;
-                           }else{
-                              un_highlighted.push_str(line);
-                              un_highlighted.push('\n');
-                           }
-                        }
-                     },
-                     None => {
-                        un_highlighted.push_str(line);
-                        un_highlighted.push('\n');
-                     }
-                  }
+               let normal_font = if on_exec_intr & !on_symbol{
+                  iced::Font{ weight: iced::font::Weight::Bold, .. Default::default()}
                }else{
-                  un_highlighted.push('\n');
-               }
-            };
+                  iced::Font{ .. Default::default()}
+               };
+
+               let normal_colour = if on_symbol{
+                  iced::color!(100,0,0)
+               }else{
+                  iced::color!(0,0,0)
+               };
+               let current = current_search_result(&search_results,sr_idx);
+               let inner_text  = if current.is_some_and(|sr| sr == line_number){
+                  let focused = app.searchbar.as_ref()
+                     .unwrap()
+                     .is_nth_term_focused(sr_idx);
+
+                  let v = highlight_search_result(
+                     &app.searchbar.as_ref().unwrap().target,
+                     line,
+                     &search_results[sr_idx],
+                     focused,
+                     Some((normal_colour,normal_font))
+                     );
+                  sr_idx += 1;
+                  v
+               }else{
+                  let inter = text(line)
+                     .size(TEXT_SIZE)
+                     .style(normal_colour)
+                     .width(iced::Length::Fill)
+                     .font(normal_font);
+                  row![
+                     inter
+                  ]
+               };
+
+               let msg = Event::Ui(Gui::SubmitGuiBkpt(addr));
+               let rendered_line = inlay_button_ref(inner_text.into(), msg, on_breakpoint );
+               text_box = text_box.push(rendered_line);
+            }else{
+               text_box = text_box.push(text("\n"));
+            }
             line_number += 1;
-         }
-         if !un_highlighted.trim().is_empty(){
-            text_box = text_box.push(text(&un_highlighted).size(TEXT_SIZE).width(iced::Length::Fill));
          }
          //let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill).style(iced::color!(100,0,0));
          container(scrollable(text_box.spacing(0)).id(app.diasm_windows.id_of(id).unwrap().clone()))
@@ -1324,6 +1211,26 @@ impl Application for App{
             }
          },
 
+         Event::Ui(Gui::SubmitGuiBkpt(addr))=>{
+            if self.breakpoints.contains(&addr){
+               match self.cmd_sender{
+                  Some(ref mut sndr) =>{
+                     sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
+                     self.breakpoints.retain(|x| *x != addr);
+                  },
+                  None => {panic!("cannot interact with dbg session")}
+               }
+            }else{
+               match self.cmd_sender{
+                  Some(ref mut sndr)=>{
+                     sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
+                     self.breakpoints.push(addr);
+                  },
+                  None => {panic!("cannot interact with dbg session")}
+               }
+            }
+         },
+
          Event::Dbg(Debug::Step) => {
             let mut sys = self.sync_sys.try_lock().unwrap();
             Simulator::step_or_signal_halt(&mut sys).unwrap();
@@ -1461,6 +1368,7 @@ pub enum Gui{
    Exp(Explorer),
    SetBkptInput(String),
    SubmitBkpt,
+   SubmitGuiBkpt(u32),
    SubmitHalt,
    OpenSearchBar,
    SubmitSearch,
