@@ -19,7 +19,7 @@ pub struct App{
    diasm_windows: Window,
    entry_point: usize,
    pub disasm: String,
-   register_hex_display: [bool;16],
+   register_hex_display: [bool;13],
    searchbar: Option<SearchBar>,
    symbols: Vec<SymbolDefinition>,
    mem_view: Option<MemoryView>,
@@ -53,6 +53,37 @@ impl From<&System> for SystemView{
          raw_ir: sys.read_raw_ir()
       }
    }
+}
+
+fn inlay_button(label: String,on_click: Event, highlight: bool,components: Option<Element<'static,Event>>) -> iced::widget::MouseArea<'static,Event,iced::Renderer> {
+   if components.is_some(){
+      return mouse_area(
+         container(
+            components.unwrap()
+         ).style(brkpt_theme)
+      ).on_release(on_click);
+   }
+   if highlight{
+      mouse_area(
+         container(
+            text(label).size(TEXT_SIZE).width(iced::Length::Shrink)
+         ).style(brkpt_theme)
+      ).on_release(on_click)
+   }else{
+      mouse_area(text(label).size(TEXT_SIZE).width(iced::Length::Shrink))
+      .on_release(on_click)
+   }
+}
+
+fn adjustable_register(reg_num: u32,name: &str, value: u32,in_hex: bool) -> Row<Event>{
+   let label = if in_hex{
+      format!("  {}: {:#x}",name,value)
+   }else{
+      format!("  {}: {}",name,value)
+   };
+   row![
+   inlay_button(label,Event::Ui(Gui::ToggleRegisterDisplay(reg_num)),false,None)
+   ]
 }
 
 impl Display for SystemView{
@@ -596,8 +627,105 @@ fn pane_render<'a>(
       },
 
       PaneType::SystemState => {
-         let str_state = format!("{}",app.sys_view);
-         scrollable(text(str_state).size(TEXT_SIZE)).width(iced::Length::Fill).height(iced::Length::Fill).into()
+         let sview = &app.sys_view;
+         column![
+            text(format!("  mode: {:?}",sview.mode))
+               .size(TEXT_SIZE)
+               .width(iced::Length::Fill),
+            adjustable_register(
+               0,
+               "r0",
+               sview.registers.generic[0],
+               app.register_hex_display[0]
+            ),
+            adjustable_register(
+               1,
+               "r1",
+               sview.registers.generic[1],
+               app.register_hex_display[1]
+            ),
+            adjustable_register(
+               2,
+               "r2",
+               sview.registers.generic[2],
+               app.register_hex_display[2]
+            ),
+            adjustable_register(
+               3,
+               "r3",
+               sview.registers.generic[3],
+               app.register_hex_display[3]
+            ),
+            adjustable_register(
+               4,
+               "r4",
+               sview.registers.generic[4],
+               app.register_hex_display[4]
+            ),
+            adjustable_register(
+               5,
+               "r5",
+               sview.registers.generic[5],
+               app.register_hex_display[5]
+            ),
+            adjustable_register(
+               6,
+               "r6",
+               sview.registers.generic[6],
+               app.register_hex_display[6]
+            ),
+            adjustable_register(
+               7,
+               "r7",
+               sview.registers.generic[7],
+               app.register_hex_display[7]
+            ),
+            adjustable_register(
+               8,
+               "r8",
+               sview.registers.generic[8],
+               app.register_hex_display[8]
+            ),
+            adjustable_register(
+               9,
+               "r9",
+               sview.registers.generic[9],
+               app.register_hex_display[9]
+            ),
+            adjustable_register(
+               10,
+               "r10",
+               sview.registers.generic[10],
+               app.register_hex_display[10]
+            ),
+            adjustable_register(
+               11,
+               "r11",
+               sview.registers.generic[11],
+               app.register_hex_display[11]
+            ),
+            adjustable_register(
+               12,
+               "r12",
+               sview.registers.generic[12],
+               app.register_hex_display[12]
+            ),
+            text(format!("  SP: {:#010x}",sview.sp))
+               .size(TEXT_SIZE)
+               .width(iced::Length::Fill),
+
+            text(format!("  LR: {:#010x}",sview.registers.lr))
+               .size(TEXT_SIZE)
+               .width(iced::Length::Fill),
+
+            text(format!("  PC: {:#010x}",sview.registers.pc))
+               .size(TEXT_SIZE)
+               .width(iced::Length::Fill),
+
+            text(format!("  XPSR: {:#010x}",sview.xpsr))
+               .size(TEXT_SIZE)
+               .width(iced::Length::Fill)
+         ].into()
       },
 
       PaneType::MemoryExplorer => {
@@ -731,7 +859,7 @@ impl Application for App{
          disasm: disassembly,
          entry_point,
          symbols,
-         register_hex_display: [false;16],
+         register_hex_display: [false;13],
          sys_view: starting_view,
          cmd_sender: None,
          mem_view: None,
@@ -1153,6 +1281,10 @@ impl Application for App{
             }
          },
 
+         Event::Ui(Gui::ToggleRegisterDisplay(i))=>{
+            self.register_hex_display[i as usize] = !self.register_hex_display[i as usize];
+         },
+
          Event::Ui(Gui::SubmitHalt)=>{
             match self.cmd_sender{
                Some(ref mut sndr)=>{
@@ -1335,7 +1467,8 @@ pub enum Gui{
    FocusNextSearchResult,
    CloseSearchBar,
    SetSearchInput(String),
-   CentreDisassembler
+   CentreDisassembler,
+   ToggleRegisterDisplay(u32)
 }
 
 #[derive(Debug,Clone)]
