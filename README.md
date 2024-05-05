@@ -12,6 +12,30 @@ Only the `.text` section will be disassembled.\
 The simulator has only been tested with ELFs produced by the gnu arm-none-eabi toolchain.
 
 # Using The Simulator
+
+## The Disassembly View
+You can open the disassembly view by clicking on the `disassembly` button. \
+the disassembly view allows you to see the code in the `.text` section of the loaded program. \
+The instruction pointed to by the `PC` register is always displayed in bold. \
+You can add/remove breakpoints at a specific instruction by clicking on the line in the diassembly window. 
+
+## The Register View
+You can open the register view by clicking on the `registers` button. \
+The registers view shows the state of a number of general purpose registers. \
+You can change the registers `R0-R12` to display their value in either decimal or hex
+by clicking on them.
+The register view is updated whenever you manually step the simulator or a halt occurs.
+
+## The Memory View
+You can open the memory view by clicking on the `memory` button. \
+The memory view allows you to inspect the memory values of the simulator within a certain memory range. \
+The display of the memory view is updated whenever you manually step the simulator or a halt occurs.
+
+## Shortcuts
+`Alt + Enter` : centres the disassembly around the instruction pointed to by the `PC` register. \
+`Ctrl + f` : search the disassembly for a string. \
+`backspace` : press backspace to close the focused window. 
+
 ## Start Up Routine
 ### Reset boot mode
 By default the simulator will execute a system reset on boot and hand off 
@@ -34,12 +58,6 @@ You can trigger a reset at anytime, even during program execution.
 ## Shutdown
 The simulator will continue running until it encounters an error. \
 Use the halt button to stop execution at anytime. \
-Use the close button to close the simulator.
-
-## Shortcuts
-`Alt + Enter` : centres the disassembly around the instruction pointed to by the `PC` register.
-`Ctrl + f` : search the disassembly for a string.
-`backspace` : press backspace to close the focused window.
 
 ## Using Exceptions
 The vector table offset by default is 0. but can be configured with the `--vtor=<HEX>` flag.\
@@ -77,6 +95,7 @@ code.s
         
     _main:
      <main program goes here>
+    .pool //make sure the pool occurs before _STACK_START label
     .align 3
     _STACK_START:
 
@@ -99,7 +118,6 @@ SECTIONS{
 The simulator supports the full 4GB of address space and uses the default armv6-m address map.
 
 ## Notes On compatability with ARMv6-M ISA 
-The simulator is still in development so not all instructions are implemented yet.\
 The memory mapped registers of the system control space (SCS) are partially implemented.\
 You can use the ICSR to trigger NMI and PendSV interrupts. 
 The SHPR2 and SHPR3 registers can be used to change the priority of SVCall, SysTick and PendSV. \
@@ -111,15 +129,13 @@ The vector table offset is not configurable at runtime. \
 If you encounter any bugs please open an issue :)
 
 # TODO List
-- [x] Add `check_exception()` logic to simulation on UI thread
-- [X] Add Halt and Reset button to UI
-- [X] Support NMI through memory mapped SCS
-- [ ] Allow breakpoints to be added by clicking on a line of text in the disassembly
+- [x] Add Halt and Reset button to UI
+- [x] Support NMI through memory mapped SCS
+- [x] Allow breakpoints to be added by clicking on a line of text in the disassembly
 - [x] Add an option to  execute the reset handler as part of the start up routine
 - [x] Allow Search Function to also search symbol names
 - [x] fix bug where search results dont show if the result is present on the IR line
 - [ ] add a line limit to the execution logs
 - [x] support focus on code search results
-- [ ] disassemble `.text` and `.data` sections by default 
 - [ ] add command line option to force a section to be included in the disassembly
 - [x] add option to allow to do reset without an explicit reset handler (i.e just jump to `entry_point`) 
