@@ -34,6 +34,7 @@ The display of the memory view is updated whenever you manually step the simulat
 ## Shortcuts
 `Alt + Enter` : centres the disassembly around the instruction pointed to by the `PC` register. \
 `Ctrl + f` : search the disassembly for a string. \
+`Ctrl + d` : remove all breakpoints. \
 `backspace` : press backspace to close the focused window. 
 
 ## Start Up Routine

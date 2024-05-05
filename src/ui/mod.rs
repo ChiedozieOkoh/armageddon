@@ -300,10 +300,10 @@ macro_rules! split_pane_event {
     };
 }
 
-fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
+fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane,n_breakpoints: usize)->Element<'a, Event>{
    use pane_grid::Axis::Vertical as Vertical;
    use pane_grid::Axis::Horizontal as Horizontal;
-   row![
+   let mut cmds = row![
       img_button(
          "disassembly",
          split_pane_event!(pane,PaneType::Disassembler,Vertical),
@@ -336,7 +336,15 @@ fn pane_cmds<'a>(n_panes: usize, pane: pane_grid::Pane)->Element<'a, Event>{
       }else{
          button(text("close"))
       }
-   ].spacing(5).into()
+   ].spacing(5);
+
+   if n_breakpoints > 0 {
+      cmds = cmds.push(
+         button(text("clear breakpoints")).on_press(Event::Ui(Gui::SubmitBkptClear))
+      )
+   }
+
+   cmds.into()
 }
 
 /*
@@ -777,6 +785,13 @@ impl Application for App{
                       None
                    }
                 },
+                iced::keyboard::KeyCode::D=>{
+                   if modifiers.control() && matches!(status,iced::event::Status::Ignored){
+                      Some(Event::Ui(Gui::SubmitBkptClear))
+                   }else{
+                      None
+                   }
+                },
                 iced::keyboard::KeyCode::F =>{
                    if modifiers.control(){
                       Some(Event::Ui(Gui::OpenSearchBar))
@@ -825,6 +840,11 @@ impl Application for App{
                   sys.remove_breakpoint(addr);
                },
 
+               Event::Dbg(Debug::ClearBreakpoints)=>{
+                  let mut sys = async_copy.lock().unwrap();
+                  sys.clear_breakpoints();
+               }
+
                Event::Dbg(Debug::Disconnect) => {
                   if !output.is_closed(){
                      output.close_channel();
@@ -864,6 +884,9 @@ impl Application for App{
                               },
                               Event::Dbg(Debug::DeleteBreakpoint(addr))=>{
                                  sys.remove_breakpoint(addr);
+                              },
+                              Event::Dbg(Debug::ClearBreakpoints)=>{
+                                 sys.clear_breakpoints();
                               },
                               Event::Dbg(e) => {
                                  panic!("invalid cmd {:?} sent to simulator loop", e)
@@ -1172,6 +1195,16 @@ impl Application for App{
             self.register_hex_display[i as usize] = !self.register_hex_display[i as usize];
          },
 
+         Event::Ui(Gui::SubmitBkptClear)=>{
+            match self.cmd_sender{
+               Some(ref mut sndr)=>{
+                  let _ = sndr.try_send(Event::Dbg(Debug::ClearBreakpoints));
+                  self.breakpoints.clear();
+               },
+               None => {panic!("cannot interact with dbg session")}
+            }
+         },
+
          Event::Ui(Gui::SubmitHalt)=>{
             match self.cmd_sender{
                Some(ref mut sndr)=>{
@@ -1279,7 +1312,7 @@ impl Application for App{
 
 
    fn view(&self) -> iced::Element<'_, Self::Message, iced::Renderer> {
-      let pane_buttons = pane_cmds(self.n_panes,self.focused_pane.clone());
+      let pane_buttons = pane_cmds(self.n_panes,self.focused_pane.clone(),self.breakpoints.len());
       let layout = PaneGrid::new(&self._state, |id, pane, _maximised|{
          let is_focused = id == self.focused_pane;
          let title_bar = pane_titles(pane,is_focused);
@@ -1355,6 +1388,7 @@ pub enum Debug{
    Reset,
    CreateBreakpoint(u32),
    DeleteBreakpoint(u32),
+   ClearBreakpoints,
    Connect(iced_mpsc::Sender<Event>)
 }
 
@@ -1370,6 +1404,7 @@ pub enum Gui{
    SubmitBkpt,
    SubmitGuiBkpt(u32),
    SubmitHalt,
+   SubmitBkptClear,
    OpenSearchBar,
    SubmitSearch,
    FocusNextSearchResult,

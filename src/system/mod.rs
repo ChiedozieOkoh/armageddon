@@ -784,6 +784,11 @@ impl System{
       self.breakpoints.retain(|brkpt| *brkpt != (addr as usize));
    }
 
+   #[inline]
+   pub fn clear_breakpoints(&mut self){
+      self.breakpoints.clear();
+   }
+
    pub fn is_locked_up(&self)->bool{
       self.locked_up
    }
