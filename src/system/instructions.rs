@@ -51,16 +51,32 @@ pub fn negative_flag(apsr: Apsr)->bool{
    return (from_arm_bytes(apsr) & 0x80000000) > 0;
 }
 
+pub fn negative_flag_u32(xpsr: u32)->bool{
+   return (xpsr & 0x80000000) > 0;
+}
+
 pub fn zero_flag(apsr: Apsr)-> bool{
    return (from_arm_bytes(apsr) & 0x40000000) > 0;
+}
+
+pub fn zero_flag_u32(xpsr: u32)-> bool{
+   return (xpsr & 0x40000000) > 0;
 }
 
 pub fn carry_flag(apsr: Apsr)-> bool{
    return (from_arm_bytes(apsr) & 0x20000000) > 0;
 }
 
+pub fn carry_flag_u32(xpsr: u32)-> bool{
+   return (xpsr & 0x20000000) > 0;
+}
+
 pub fn overflow_flag(apsr: Apsr)->bool{
    return (from_arm_bytes(apsr) & 0x10000000) > 0;
+}
+
+pub fn overflow_flag_u32(xpsr: u32)->bool{
+   return (xpsr & 0x10000000) > 0;
 }
 
 pub fn cond_passed(apsr: Apsr, b_cond: &Opcode)->bool{

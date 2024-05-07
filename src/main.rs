@@ -98,6 +98,7 @@ fn gui_diasm(){
       println!("system boot type: MANUAL");
    }
 
+   sys.trace_enabled = true;
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 
    for i in disasm.into_iter(){

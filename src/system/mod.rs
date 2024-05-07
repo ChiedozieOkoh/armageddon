@@ -48,6 +48,7 @@ const IPSR_MASK: u32 = 0xFFFFFFC0;
 const EXC_RETURN_TO_HANDLER: u32 = 1;
 const EXC_RETURN_TO_THREAD_MSP: u32 = 9;
 const EXC_RETURN_TO_THREAD_PSP: u32 = 0xD;
+const COMPRESS_BAL: &'static str = "\n    ...\n";
 
 macro_rules! unpack_operands {
     ($variant:expr, $_type:path, $($vari:ident),+) => {
@@ -418,9 +419,9 @@ impl System{
       if (addr & 0xF0000000 == 0xF0000000) && matches!(self.mode, Mode::Handler){
          match self.exception_return(addr){
             Ok(exc_n) => {
-               dbg_ln!("returned from exception {}",exc_n);
+               dbg_ln!("returned from {} exception ",exception_name(exc_n));
                if self.trace_enabled{
-                  self.trace.push_str(&format!("returned from exception {}",exc_n));
+                  self.trace.push_str(&format!("returned from {} exception ",exception_name(exc_n)));
                   self.trace.push('\n');
                }
                return Ok(0);
@@ -798,6 +799,8 @@ impl System{
          return Ok(0);
       }
 
+      self.scs.clock_tick()?;
+
       let maybe_code: [u8;2] = load_thumb_instr(&self, self.registers.pc as u32)?;
       dbg_ln!("XPSR before step: {:#x} ({})",from_arm_bytes(self.xpsr),from_arm_bytes(self.xpsr));
       let instr_size = instruction_size(maybe_code);
@@ -814,8 +817,21 @@ impl System{
                operands
             );
             if self.trace_enabled{
-               self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
-               self.trace.push('\n');
+               if matches!(code,Opcode::_16Bit(B16::B_ALWAYS)){
+                  let offset = unpack_operands!(operands,Operands::B_ALWAYS,off);
+                  if offset != 0{
+                     self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                     self.trace.push('\n');
+                  }else{
+                     if !self.trace.ends_with(COMPRESS_BAL){
+                        self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                        self.trace.push_str(COMPRESS_BAL);
+                     }
+                  }
+               }else{
+                  self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                  self.trace.push('\n');
+               }
             }
             match code {
                Opcode::_16Bit(B16::ADCS)=>{
@@ -1419,6 +1435,10 @@ impl System{
                   let addr = self.registers.generic[base.0 as usize] + self.registers.generic[offset.0 as usize];
                   let value: [u8;4] = load_memory::<4>(&self, addr)?;
                   self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
+                  if let Some(MemoryMappedRegister::syst_csr) = MemoryMappedRegister::from_address(addr){
+                     self.scs.clear_countflag();
+                  }
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1431,6 +1451,10 @@ impl System{
 
                   let addr = self.registers.generic[base.0 as usize] + offset.0;
                   let value: [u8;4] = load_memory(&self, addr)?;
+                  if let Some(MemoryMappedRegister::syst_csr) = MemoryMappedRegister::from_address(addr){
+                     self.scs.clear_countflag();
+                  }
+
                   self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
                   return Ok(instr_size.in_bytes() as i32);
                },
@@ -1459,6 +1483,11 @@ impl System{
                   let base = self.get_sp();
                   let addr = base + offset.0; 
                   let byte_4: [u8;4] = load_memory(&self,addr)?;
+
+                  if let Some(MemoryMappedRegister::syst_csr) = MemoryMappedRegister::from_address(addr){
+                     self.scs.clear_countflag();
+                  }
+
                   let word = from_arm_bytes(byte_4);
                   self.registers.generic[dest.0 as usize] = word;
 
@@ -1539,6 +1568,11 @@ impl System{
                   let addr = Self::offset_read_pc(self.read_pc_word_aligned(), offset.0 as i32)?;
                   let value = load_memory::<4>(&self, addr)?;
                   self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
+
+                  if let Some(MemoryMappedRegister::syst_csr) = MemoryMappedRegister::from_address(addr){
+                     self.scs.clear_countflag();
+                  }
+
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -1568,6 +1602,10 @@ impl System{
                   let registers = get_set_bits(list);
                   for r in registers{
                      let v = from_arm_bytes(load_memory(self, data_ptr)?);
+
+                     if let Some(MemoryMappedRegister::syst_csr) = MemoryMappedRegister::from_address(data_ptr){
+                        self.scs.clear_countflag();
+                     }
                      self.registers.generic[r as usize] = v;
                      data_ptr += 4;
                   }
@@ -2398,6 +2436,26 @@ pub enum ArmException{
    ExternInterrupt(u32),
 }
 
+fn exception_name(num: u32)->String{
+   let mut ext: String = "NVIC Interrupt #".into();
+   match num{
+      0 => panic!("reserved exception number {}",num),
+      1 => "Reset".into(),
+      2 => "Nmi".into(),
+      3 => "Hardfault".into(),
+      4 ..=10 => panic!("reserved exception number {}",num), //is describe as RESERVED in the ISA
+      11 => "Svc".into(),
+      12 ..=13 => panic!("reserved exception number {}",num), //RESERVED
+      14 => "PendSV".into(),
+      15 => "SysTick".into(),
+      _  => {
+         let inum = num -16;
+         ext.push_str(&inum.to_string());
+         ext
+      }
+   }
+}
+
 impl ArmException{
    pub fn from_xpsr(sys: &System)->Option<Self>{
       let ipsr = from_arm_bytes(sys.xpsr) & 0x3F;
@@ -2485,6 +2543,7 @@ enum MemoryMappedRegister{
    syst_csr,
    syst_rvr,
    syst_cvr,
+   syst_calib,
    icsr,
    vtor,
    aircr,
@@ -2497,56 +2556,29 @@ enum MemoryMappedRegister{
 impl MemoryMappedRegister{
    pub fn from_address(address: u32)->Option<MemoryMappedRegister>{
       match address{
-         0xE000E010 =>{
-            Some(Self::syst_csr)
-         },
-         0xE000E014 =>{
-            Some(Self::syst_rvr)
-         },
-         0xE000E100 =>{
-            Some(Self::nvic_iser)
-         },
-         0xE000E180 =>{
-            Some(Self::nvic_icer)
-         },
-         0xE000E200 =>{
-            Some(Self::nvic_ispr)
-         },
-         0xE000E280 =>{
-            Some(Self::nvic_icpr)
-         },
+         0xE000E010 =>{ Some(Self::syst_csr) },
+         0xE000E014 =>{ Some(Self::syst_rvr) },
+         0xE000E018 =>{ Some(Self::syst_cvr) },
+         0xE000E01C =>{ Some(Self::syst_calib) },
+         0xE000E100 =>{ Some(Self::nvic_iser) },
+         0xE000E180 =>{ Some(Self::nvic_icer) },
+         0xE000E200 =>{ Some(Self::nvic_ispr) },
+         0xE000E280 =>{ Some(Self::nvic_icpr) },
          0xE000E400 ..= 0xE000E41C=>{
             let offset = address - 0xE000E400; 
             let index = offset / 4;
             assert!(index < 8);
             Some(Self::nvic_ipr(index as u8))
          },
-         0xE000ED04 =>{
-            Some(Self::icsr)
-         },
-         0xE000ED08 =>{
-            Some(Self::vtor)
-         },
-         0xE000ED0C=>{
-            Some(Self::aircr)
-         },
-         0xE000ED10=>{
-            Some(Self::scr)
-         },
-         0xE000ED14=>{
-            Some(Self::ccr)
-         },
-
-         0xE000ED1C=>{
-            Some(Self::shpr2)
-         },
-
-         0xE000ED20=>{
-            Some(Self::shpr3)
-         },
-
+         0xE000ED04 =>{ Some(Self::icsr) },
+         0xE000ED08 =>{ Some(Self::vtor) },
+         0xE000ED0C =>{ Some(Self::aircr) },
+         0xE000ED10 =>{ Some(Self::scr) },
+         0xE000ED14 =>{ Some(Self::ccr) },
+         0xE000ED1C =>{ Some(Self::shpr2) },
+         0xE000ED20 =>{ Some(Self::shpr3) },
          _ => {
-            println!("WARN: {} has no associated system register in the PPB space",address);
+            println!("WARN: {:#x} has no associated system register in the PPB space",address);
             None
          }
       }
@@ -2594,6 +2626,7 @@ impl MemoryMappedRegister{
          },
          MemoryMappedRegister::syst_rvr=>{sys.scs.clock_reset},
          MemoryMappedRegister::syst_cvr=>{sys.scs.clock_value},
+         MemoryMappedRegister::syst_calib=>{0x80000000}
       }
    }
 
@@ -2797,12 +2830,22 @@ impl MemoryMappedRegister{
          
          MemoryMappedRegister::syst_rvr=>{
             sys.scs.clock_reset = v & 0x00FFFFFF;
+            if !sys.scs.sys_timer_enabled{
+               dbg_ln!("updating SYST_CVR register");
+               sys.scs.clock_value = v & 0x00FFFFFF;
+            }
          },
 
          MemoryMappedRegister::syst_cvr=>{
             sys.scs.clock_value = 0;
             sys.scs.unread_systick = true;
          },
+         MemoryMappedRegister::syst_calib=>{
+            dbg_ln!("SYST.CALIB is read only");
+            if sys.trace_enabled{
+               sys.trace.push_str("WARN: SYST.CALIB is a read only register, write will be ignored\n");
+            }
+         }
       }
    }
 }
@@ -2850,10 +2893,17 @@ impl SystemControlSpace{
       self.icsr |= exc_n;
    }
 
+   pub fn clear_countflag(&mut self){
+      self.unread_systick = false;
+      dbg_ln!("cleared SYST_CSR.COUNTFLAG");
+   }
+
    pub fn clock_tick(&mut self)->Result<(),ArmException>{
-      if self.clock_value == 0 && self.sys_timer_enabled && self.tick_interrupt_isr{
+      dbg_ln!("clock value = {}",self.clock_value);
+      if self.clock_value == 0 && self.sys_timer_enabled{
          self.clock_value = self.clock_reset;
-         Err(ArmException::SysTick)
+         self.unread_systick = true;
+         if self.tick_interrupt_isr{ Err(ArmException::SysTick) }else{ Ok(()) }
       }else{
          if self.sys_timer_enabled{
             self.clock_value -= 1;

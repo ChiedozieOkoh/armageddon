@@ -1200,9 +1200,6 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
          assert_eq!(sys.scs.shpr3 & 1 << 31,1 << 31);
          assert_eq!(sys.scs.shpr3 & 1 << 23,1 << 23);
 
-         
-
-         
          sys.registers.sp_main = 1 << 15; // dummy SP
          sys.registers.sp_process = 1 << 15;// dummy SP
          sys.active_exceptions[ArmException::ExternInterrupt(16).number() as usize] = ExceptionStatus::Pending;
@@ -1218,6 +1215,151 @@ pub fn control_interrupt_priorities()->Result<(),std::io::Error>{
       }
    )?;
 
+   Ok(())
+}
+
+#[test]
+pub fn sys_timer_test()->Result<(),std::io::Error>{
+
+   let code = b".thumb
+         .text
+         LDR r0,=0xE000E014
+         MOV r1, #7 
+         STR r1, [r0,#0]
+
+         LDR r0,=0xE000E018
+         MOV r1,#2
+         STR r1, [r0,#0]
+
+         LDR r0,=0xE000E010
+         MOV r1, #1
+         STR r1, [r0,#0]
+
+         MOV r1, #3
+         STR r1, [r0,#0]
+
+         LDR r1, [r0,#0]
+         WFE
+      ";
+
+
+   run_assembly_armv6m(
+      Path::new("./assembly_tests/sim_systick.s"),
+      code,
+      |entry_point,code|{
+         let mut sys = load_code_into_system(entry_point, code)?;
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert!(matches!(
+            sys.active_exceptions[ArmException::SysTick.number() as usize],
+            ExceptionStatus::Inactive
+            )
+         );
+         assert_eq!(2,sys.registers.pc);
+         assert_eq!(sys.scs.sys_timer_enabled,false);
+         assert_eq!(sys.scs.tick_interrupt_isr,false);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         println!("clock_reset:={}",sys.scs.clock_reset);
+         println!("clock_value:={}",sys.scs.clock_value);
+         assert_eq!(sys.scs.clock_reset,7);
+         assert_eq!(sys.scs.clock_value,7);
+
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+
+         assert_eq!(sys.scs.clock_value,0);
+         assert!(sys.scs.unread_systick);
+         assert!(matches!(
+            sys.active_exceptions[ArmException::SysTick.number() as usize],
+            ExceptionStatus::Inactive
+            ),
+            "SYSTICK_CSR.ENABLE is not set so should not trigger interrupt"
+         );
+
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert!(!sys.scs.tick_interrupt_isr);
+         assert!(!sys.scs.sys_timer_enabled);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert!(!sys.scs.tick_interrupt_isr);
+         assert!(sys.scs.sys_timer_enabled);
+         println!("enabled system timer");
+         assert_eq!(sys.scs.clock_value,0);
+         assert!(sys.scs.unread_systick);
+         assert!(matches!(
+            sys.active_exceptions[ArmException::SysTick.number() as usize],
+            ExceptionStatus::Inactive
+            ),
+            "SYSTICK_CSR.TICKINT is not set so should not trigger interrupt"
+         );
+
+         let i = sys.step()?;
+         assert_eq!(sys.scs.clock_value,7);
+         sys.offset_pc(i)?;
+         assert!(sys.scs.unread_systick);
+         assert!(!sys.scs.tick_interrupt_isr);
+         assert!(sys.scs.sys_timer_enabled);
+
+         let i = sys.step()?;
+         assert_eq!(sys.scs.clock_value,6);
+         assert!(sys.scs.tick_interrupt_isr);
+         assert!(sys.scs.unread_systick);
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         assert_eq!(sys.scs.clock_value,5);
+         assert!(!sys.scs.unread_systick);
+         sys.offset_pc(i)?;
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.scs.clock_value,4);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.scs.clock_value,3);
+         assert!(!sys.scs.unread_systick);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.scs.clock_value,2);
+         assert!(!sys.scs.unread_systick);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.scs.clock_value,1);
+         assert!(!sys.scs.unread_systick);
+
+         let i = sys.step()?;
+         sys.offset_pc(i)?;
+         assert_eq!(sys.scs.clock_value,0);
+         assert!(!sys.scs.unread_systick);
+
+         match sys.step(){
+            Ok(_) => panic!("write to SYST_CVR should trigger systick exception"),
+            Err(e) => {
+               assert!(matches!(e,ArmException::SysTick));
+               assert!(sys.scs.unread_systick);
+               assert_eq!(sys.scs.clock_value,7);
+            },
+         }
+         Ok(())
+      }
+   )?;
    Ok(())
 }
 

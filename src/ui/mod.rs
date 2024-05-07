@@ -5,6 +5,13 @@ use iced::widget::text_input;
 
 use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self, write_memory}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol, TextPosition}, binutils::{from_arm_bytes_16b, u32_to_arm_bytes}, elf::decoder::SymbolDefinition, to_arm_bytes};
 
+use crate::system::instructions::{
+   negative_flag_u32,
+   zero_flag_u32,
+   carry_flag_u32,
+   overflow_flag_u32
+};
+
 use crate::dbg_ln;
 use crate::binutils::from_arm_bytes;
 const TEXT_SIZE: u16 = 11;
@@ -523,7 +530,7 @@ fn pane_render<'a>(
 
       PaneType::SystemState => {
          let sview = &app.sys_view;
-         column![
+         scrollable(column![
             text(format!("  mode: {:?}",sview.mode))
                .size(TEXT_SIZE)
                .width(iced::Length::Fill),
@@ -617,10 +624,17 @@ fn pane_render<'a>(
                .size(TEXT_SIZE)
                .width(iced::Length::Fill),
 
-            text(format!("  XPSR: {:#010x}",sview.xpsr))
+            text(format!(
+                  "  XPSR: {:#010x} (N:{} Z:{} C:{} V:{})",
+                  sview.xpsr,
+                  negative_flag_u32(sview.xpsr) as u32,
+                  zero_flag_u32(sview.xpsr) as u32,
+                  carry_flag_u32(sview.xpsr) as u32,
+                  overflow_flag_u32(sview.xpsr) as u32
+            ))
                .size(TEXT_SIZE)
                .width(iced::Length::Fill)
-         ].into()
+         ]).into()
       },
 
       PaneType::MemoryExplorer => {
@@ -739,8 +753,7 @@ impl Application for App{
    fn new(args: Self::Flags)->(Self,Command<Event>){
       let (state,def) = pane_grid::State::new(PaneType::Disassembler);
       
-      let (mut sys,entry_point, symbols, disassembly) = args;
-      sys.trace_enabled = true;
+      let (sys,entry_point, symbols, disassembly) = args;
       let starting_view: SystemView = (&sys).into();
       let sync_sys_arc = Arc::new(Mutex::new(sys));
       let mut windows = Window::create();
@@ -1023,30 +1036,11 @@ impl Application for App{
 
          Event::Ui(Gui::CentreDisassembler)=>{
             let ir = self.sys_view.raw_ir;
-            let mut ir_ln = 0_u32;
-            let mut line_number = 0_u32;
-            for line in self.disasm.lines(){
-               if !line.trim().is_empty(){
-                  let offset = line.split(":").next();
-
-                  match offset{
-                     Some(address) => {
-                        dbg_ln!("parsing {}",address);
-                        let add_v = u32::from_str_radix(
-                           address.trim().trim_start_matches("0x").trim(),
-                           16
-                        ).unwrap();
-                        if add_v == ir{
-                           ir_ln = line_number;
-                        }
-                     },
-                     _ => {}
-                  }
-               }
-               line_number += 1;
-            }
-            let y_ratio = (ir_ln as f32) / line_number as f32;
-            dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,line_number,y_ratio);
+            //let mut ir_ln = 0_u32;
+            //let mut line_number = 0_u32;
+            let (ir_ln,total_lines) = get_pc_text_position(&self.disasm,ir);
+            let y_ratio = (ir_ln as f32) / total_lines as f32;
+            dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
             if let Some(id) = self.diasm_windows.get_focused_pane(){
                println!("snapping to {:?}",id);
                cmd = iced::widget::scrollable::snap_to(
@@ -1370,6 +1364,34 @@ fn pane_titles(kind: &PaneType, focused: bool) -> pane_grid::TitleBar<Event> {
       },
    }
 }
+
+fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
+   let mut ir_ln: usize = 0;
+   let mut line_number: usize = 0;
+
+   for line in disasm.lines(){
+      if !line.trim().is_empty(){
+         let offset = line.split(":").next();
+
+         match offset{
+            Some(address) => {
+               dbg_ln!("parsing {}",address);
+               let add_v = u32::from_str_radix(
+                  address.trim().trim_start_matches("0x").trim(),
+                  16
+                  ).unwrap();
+               if add_v == ir{
+                  ir_ln = line_number;
+               }
+            },
+            _ => {}
+         }
+      }
+      line_number += 1;
+   }
+   (ir_ln,line_number)
+}
+
 /*pub enum Breakpoint{
    Create(usize),
    Delete(usize)
