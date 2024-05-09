@@ -45,7 +45,10 @@ pub struct App{
 struct SystemView{
    pub mode: system::Mode,
    pub registers: Registers,
+   pub privileged: bool,
    pub sp: u32,
+   pub psp: u32,
+   pub msp: u32,
    pub xpsr: u32,
    pub raw_ir: u32
 }
@@ -56,6 +59,9 @@ impl From<&System> for SystemView{
          mode: sys.mode.clone(),
          registers: sys.registers.clone(),
          sp: sys.get_sp(),
+         privileged: sys.in_privileged_mode(),
+         psp: sys.registers.sp_process,
+         msp: sys.registers.sp_main,
          xpsr: from_arm_bytes(sys.xpsr),
          raw_ir: sys.read_raw_ir()
       }
@@ -115,7 +121,7 @@ impl Display for SystemView{
              "r10: {}\n",
              "r11: {}\n",
              "r12: {}\n",
-             "SP: {:#010x}\n",
+             "SP: {:#010x}    (MSP: {:#010x})(PSP: {:#010x})\n",
              "LR: {:#010x}\n",
              "PC: {:#010x}\n",
              "XPSR: {:#010x}",
@@ -135,6 +141,8 @@ impl Display for SystemView{
             self.registers.generic[11],
             self.registers.generic[12],
             self.sp,
+            self.msp,
+            self.psp,
             self.registers.lr,
             self.registers.pc,
             self.xpsr
@@ -531,7 +539,7 @@ fn pane_render<'a>(
       PaneType::SystemState => {
          let sview = &app.sys_view;
          scrollable(column![
-            text(format!("  mode: {:?}",sview.mode))
+            text(format!("  mode: {:?} ({})",sview.mode,if sview.privileged{"Privileged"}else{"Unprivileged"}))
                .size(TEXT_SIZE)
                .width(iced::Length::Fill),
             adjustable_register(
@@ -612,7 +620,7 @@ fn pane_render<'a>(
                sview.registers.generic[12],
                app.register_hex_display[12]
             ),
-            text(format!("  SP: {:#010x}",sview.sp))
+            text(format!("  SP: {:#010x}    (MSP: {:#010x})    (PSP: {:#010x})",sview.sp,sview.msp,sview.psp))
                .size(TEXT_SIZE)
                .width(iced::Length::Fill),
 

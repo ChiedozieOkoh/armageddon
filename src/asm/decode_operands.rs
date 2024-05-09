@@ -50,7 +50,7 @@ pub enum Operands{
    SP_SUB(Literal<7>),
    Byte(Literal<8>),
    HalfWord(Literal<16>),
-   EnableInterupt(bool),
+   Primask(bool),
    MSR(SpecialRegister,SrcRegister),
    MRS(DestRegister,SpecialRegister),
    Nibble(Literal<4>)
@@ -114,11 +114,11 @@ impl fmt::Display for Operands{
           Operands::SP_SUB(imm7) => write!(f, "SP, SP, {}", imm7),
           Operands::Byte(imm8) => write!(f, "{}", imm8),
           Operands::HalfWord(imm16) => write!(f, "{}", imm16),
-          Operands::EnableInterupt(flag) => {
+          Operands::Primask(flag) => {
              if *flag{
-                write!(f, "CPSIE i")
-             }else{
                 write!(f, "CPSID i")
+             }else{
+                write!(f, "CPSIE i")
              }
           },
           Operands::MSR(meta, src) => write!(f, "{:?}, {}", meta, src),
@@ -193,7 +193,7 @@ fn dbg_print(operands: &Operands)->String{
          let registers = get_set_bits(*list);
          fmt_register_list(registers)
       },
-      Operands::EnableInterupt(flag) => if *flag {String::from("CPSID i")} else{String::from("CPSIE i")},
+      Operands::Primask(flag) => if *flag {String::from("CPSID i")} else{String::from("CPSIE i")},
       _ => {
          let dbg_operands = format!("{:?}",operands);
          remove_everything_outside_brackets(&dbg_operands)
@@ -639,7 +639,7 @@ fn get_low_byte(hw: HalfWord)->Operands{
 
 fn get_cps_operands(hw: HalfWord)->Operands{
    let flat = (hw[0] & 0x10) > 0;
-   Operands::EnableInterupt(flat)
+   Operands::Primask(flat)
 }
 
 fn get_msr_operands(bytes: Word)->Operands{

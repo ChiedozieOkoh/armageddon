@@ -1,5 +1,7 @@
 use crate::binutils::{get_bit,set_bit,clear_bit,u32_to_arm_bytes,from_arm_bytes};
 use crate::asm::Word;
+
+use super::Access;
 pub type Apsr = Word;//Application Program Status Register
 
 #[derive(Debug,PartialEq)]
@@ -16,12 +18,17 @@ pub enum SpecialRegister{
    PRIMASK,
    CONTROL
 }
+pub enum RegAccess{
+   READ,
+   WRITE
+}
+
 impl SpecialRegister{
-   pub fn needs_privileged_access(&self)->bool{
+   pub fn needs_privileged_access(&self,access: RegAccess)->bool{
       match self{
          SpecialRegister::APSR => false,
-         SpecialRegister::IAPSR => todo!(),
-         SpecialRegister::EAPSR => todo!(),
+         SpecialRegister::IAPSR => true,
+         SpecialRegister::EAPSR => true,
          SpecialRegister::XPSR => true,
          SpecialRegister::IPSR => true,
          SpecialRegister::EPSR => true,
@@ -29,9 +36,44 @@ impl SpecialRegister{
          SpecialRegister::MSP => true,
          SpecialRegister::PSP => true,
          SpecialRegister::PRIMASK => true,
-         SpecialRegister::CONTROL => true,
+         SpecialRegister::CONTROL => match access{
+            RegAccess::READ => false,
+            RegAccess::WRITE => true,
+        },
       }
    }
+
+   pub fn mask(&self)->u32{
+      let apsr = 0xF0000000;
+      let epsr = 0x01000200;
+      let ipsr = 0x3F;
+      match self{
+        SpecialRegister::APSR => apsr,
+        SpecialRegister::IAPSR => apsr | ipsr,
+        SpecialRegister::EAPSR => epsr | apsr,
+        SpecialRegister::XPSR => apsr | ipsr | epsr,
+        SpecialRegister::IPSR => ipsr,
+        SpecialRegister::EPSR => epsr,
+        SpecialRegister::IEPSR => ipsr | epsr,
+        SpecialRegister::MSP => u32::MAX,
+        SpecialRegister::PSP => u32::MAX,
+        SpecialRegister::PRIMASK => 1,
+        SpecialRegister::CONTROL => 3,
+      }
+   }
+}
+
+#[macro_export]
+macro_rules! xpsr_registers {
+    () => {
+       SpecialRegister::APSR
+          | SpecialRegister::IPSR
+          | SpecialRegister::IAPSR
+          | SpecialRegister::EAPSR
+          | SpecialRegister::EPSR
+          | SpecialRegister::IEPSR
+          | SpecialRegister::XPSR
+    };
 }
 
 #[derive(Clone)]

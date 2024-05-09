@@ -5,7 +5,8 @@ use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
 use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32, from_arm_bytes_16b, BitField, sign_extend};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
 use crate::asm::decode_operands::{Operands,get_operands, get_operands_32b};
-use crate::{dbg_ln, to_arm_bytes};
+use crate::system::registers::RegAccess;
+use crate::{dbg_ln, to_arm_bytes, xpsr_registers};
 use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,multiply, xor, carry_flag, overflow_flag, ror, asr, add_with_carry, adc_flags} ;
 
 use self::instructions::{cond_passed, shift_left, shift_right};
@@ -468,7 +469,7 @@ impl System{
       return Ok(((addr & 0xFFFFFFFE_u32) as i32) - (self.registers.pc as i32));
    }
 
-   fn in_privileged_mode(&self)->bool{
+   pub fn in_privileged_mode(&self)->bool{
       match self.mode{
          Mode::Handler => {
             true
@@ -500,13 +501,26 @@ impl System{
    }
 
    pub fn set_exc_pending(&mut self, exc: ArmException){
-      self.active_exceptions[exc.number() as usize] = ExceptionStatus::Pending;
+      match self.active_exceptions[exc.number() as usize]{
+         ExceptionStatus::Inactive => {
+            println!("{} upgraded Inactive -> Pending",exception_name(exc.number()));
+            self.active_exceptions[exc.number() as usize] = ExceptionStatus::Pending;
+         },
+         ExceptionStatus::Active=>{
+            println!("{} upgraded Active -> ActiveAndPending",exception_name(exc.number()));
+            self.active_exceptions[exc.number() as usize] = ExceptionStatus::ActiveAndPending;
+         }
+         _ => {}
+      }
       match exc{
          ArmException::HardFault(msg) => {
             if !msg.trim().is_empty(){
                //println!("HARDFAULT PENDING: {}",msg);
             }
          },
+         ArmException::SysTick=> {
+            println!("SysTick pending");
+         }
          _ => {}
       }
    }
@@ -539,7 +553,7 @@ impl System{
                     return n;
                  },
                  Err(derived_exc) => {
-                    dbg_ln!("error during exception entry {:?}",derived_exc);
+                    println!("error during exception entry {:?}",derived_exc);
                     let current_priority = self.execution_priority(self.primask, &self.scs);
                     if current_priority == -1 || current_priority == -2{
                        self.lockup();
@@ -593,6 +607,7 @@ impl System{
    fn save_context_frame(&mut self,exc_type: &ArmException,offset: i32)->Result<(),ArmException>{
       let sp = self.get_sp();
       println!("SP on exception entry: {}",sp);
+      println!("context stacked in {:?} mode",self.mode);
       let mut xpsr = from_arm_bytes(self.xpsr);
       xpsr = if self.get_sp_frame_alignment(){
          xpsr | (1 << 9)
@@ -624,9 +639,29 @@ impl System{
       const main_stack_return_to_handler_mode: u32 = 0xFFFFFFF1;
       const main_stack_return_to_thread_mode: u32 = 0xFFFFFFF9;
       const process_stack_return_to_thread_mode: u32 = 0xFFFFFFFD;
+
+
+      print!("active exceptions during context stacking: ");
+      for (i,e) in self.active_exceptions[..].iter().enumerate(){
+         match e {
+            ExceptionStatus::ActiveAndPending | ExceptionStatus::Active=>{
+               print!("{} ",exception_name(i as u32));
+            },
+            _ => {}
+         }
+      }
+      println!("");
       self.registers.lr = match self.mode{
-         Mode::Handler => {0xFFFFFFF1},
+         Mode::Handler => {
+            println!("[cntx stacker] {} should return to handler mode",
+               exception_name(exc_type.number())
+            );
+            0xFFFFFFF1
+         },
          Mode::Thread =>{
+            println!("[cntx stacker] {} should return to thread mode",
+               exception_name(exc_type.number())
+            );
             if self.sp_select_bit(){0xFFFFFFFD}else{0xFFFFFFF9}
          }
       };
@@ -664,6 +699,9 @@ impl System{
       let handler_ptr = from_arm_bytes(load_memory::<4>(self, handler_addr)?);
       self.event_register = true;
       dbg_ln!("handler address: {:#x}, handler ptr: {:#x}",handler_addr,handler_ptr);
+      println!("[exception entry] {} upgraded to Active",
+         exception_name(exc_type.number())
+      );
       self.blx_interworking_offset(handler_ptr)
    }
 
@@ -673,19 +711,38 @@ impl System{
 
    fn load_context_frame(&mut self,exc_return_address: u32)->Result<(),ArmException>{
       let frame_ptr = self.get_sp();
-      self.registers.generic[0] = from_arm_bytes(load_memory(self, frame_ptr)?);
-      self.registers.generic[1] = from_arm_bytes(load_memory(self, frame_ptr + 4)?);
-      self.registers.generic[2] = from_arm_bytes(load_memory(self, frame_ptr + 8)?);
-      self.registers.generic[3] = from_arm_bytes(load_memory(self, frame_ptr + 12)?);
-      self.registers.generic[12] = from_arm_bytes(load_memory(self, frame_ptr + 16)?);
-      self.registers.lr = from_arm_bytes(load_memory(self, frame_ptr + 20)?);
-      let new_pc = from_arm_bytes(load_memory(self, frame_ptr + 24)?);
+      dbg_ln!("using SP={:#x} for exception return",frame_ptr);
+      let r0: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr)?}else{load_memory(self,frame_ptr)?};
+      let r1: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 4)?}else{load_memory(self,frame_ptr + 4)?};
+      let r2: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 8)?}else{load_memory(self,frame_ptr + 8)?};
+      let r3: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 12)?}else{load_memory(self,frame_ptr + 12)?};
+      let r12: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 16)?}else{load_memory(self,frame_ptr + 16)?};
+      let lr: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 20)?}else{load_memory(self,frame_ptr + 20)?};
+      let pc: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 24)?}else{load_memory(self,frame_ptr + 24)?};
+      self.registers.generic[0] = from_arm_bytes(r0);
+      self.registers.generic[1] = from_arm_bytes(r1);
+      self.registers.generic[2] = from_arm_bytes(r2);
+      self.registers.generic[3] = from_arm_bytes(r3);
+      self.registers.generic[12] = from_arm_bytes(r12);
+      self.registers.lr = from_arm_bytes(lr);
+      let new_pc = from_arm_bytes(pc);
       if !is_aligned(new_pc, 2){
          panic!("WTAF the pc value {:#x} in the context frame is invalid",new_pc);
       }
 
       self.registers.pc = new_pc as usize;
-      let frame_xpsr = from_arm_bytes(load_memory(self, frame_ptr + 28)?);
+      let xpsr: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 28)?}else{load_memory(self,frame_ptr + 28)?};
+      let frame_xpsr = from_arm_bytes(xpsr);
+      dbg_ln!("exception exit loaded\nr0: {} r1: {} r2: {} r3: {} r12: {}, lr: {:#x}, pc: {:#x}, xpsr: {:#x}",
+               self.registers.generic[0],
+               self.registers.generic[1],
+               self.registers.generic[2],
+               self.registers.generic[3],
+               self.registers.generic[12],
+               self.registers.lr,
+               new_pc,
+               frame_xpsr
+      );
       let frame_alignment =  frame_xpsr & 0x200 > 0;
       let new_sp = (self.get_sp() + 0x20) | (frame_alignment as u32 >> 3);
       self.set_sp(new_sp)?;
@@ -717,20 +774,34 @@ impl System{
       assert!(nested_exceptions > 0, "emulator err: return from an already inactive handler");
 
       let exc_ret_type = return_address & 0xF;
+      println!("{} active exceptions", nested_exceptions);
       match exc_ret_type{
          EXC_RETURN_TO_HANDLER => {
+            println!(
+               "{} exception will return -> HANDLER",
+               exception_name(handled_exception)
+            );
             assert!(nested_exceptions > 1,"exception return type is return to handler but only one exception is active");
             self.mode = Mode::Handler;
             self.set_sp_select_bit(false);
             assert_eq!(self.get_sp(),self.registers.sp_main);
          },
          EXC_RETURN_TO_THREAD_MSP =>{
+            println!(
+               "{} exception will return -> THREAD.MSP",
+               exception_name(handled_exception)
+            );
+
             assert!(nested_exceptions == 1,"exception return type is return to thread, so there should only be 1 active");
             self.mode = Mode::Thread;
             self.set_sp_select_bit(false);
             assert_eq!(self.get_sp(),self.registers.sp_main);
          },
          EXC_RETURN_TO_THREAD_PSP =>{
+            println!(
+               "{} exception will return -> THREAD.PSP",
+               exception_name(handled_exception)
+            );
             assert!(nested_exceptions == 1,"exception return type is return to thread, so there should only be 1 active");
             self.mode = Mode::Thread;
             self.set_sp_select_bit(true);
@@ -743,9 +814,15 @@ impl System{
       match status{
          ExceptionStatus::Active => {
             self.active_exceptions[handled_exception as usize] = ExceptionStatus::Inactive;
+            println!("{} downgraded Active -> Inactive",
+               exception_name(handled_exception)
+            );
          },
          ExceptionStatus::ActiveAndPending=>{
             self.active_exceptions[handled_exception as usize] = ExceptionStatus::Pending;
+            println!("{} downgraded ActiveAndPending -> Pending",
+               exception_name(handled_exception)
+            );
          },
          state => {panic!("exception returned from a {:?} handler",state)}
       }
@@ -799,7 +876,12 @@ impl System{
          return Ok(0);
       }
 
-      self.scs.clock_tick()?;
+      if let Err(e) =  self.scs.clock_tick(){
+         if matches!(self.active_exceptions[e.number() as usize],ExceptionStatus::Active){
+            println!("WARN: late arriving systick may cause a tight loop that starves other threads and handlers");
+         }
+         return Err(e);
+      }
 
       let maybe_code: [u8;2] = load_thumb_instr(&self, self.registers.pc as u32)?;
       dbg_ln!("XPSR before step: {:#x} ({})",from_arm_bytes(self.xpsr),from_arm_bytes(self.xpsr));
@@ -1197,8 +1279,8 @@ impl System{
                   );
 
                   let flags = compare(
-                     self.registers.generic[first.0 as usize],
-                     self.registers.generic[secnd.0 as usize]
+                     self.read_any_register(first.0),
+                     self.read_any_register(secnd.0)
                   );
                   self.update_apsr(&flags);
                   return Ok(instr_size.in_bytes() as i32);
@@ -1207,11 +1289,18 @@ impl System{
                Opcode::_16Bit(B16::CPS) => {
                   let interrupt_flag = unpack_operands!(
                      operands,
-                     Operands::EnableInterupt,
+                     Operands::Primask,
                      a
                   );
-                  self.primask = interrupt_flag;
-                  dbg_ln!("PRIMASK := {}",self.primask as u8);
+                  if self.in_privileged_mode(){
+                     self.primask = interrupt_flag;
+                     dbg_ln!("PRIMASK := {}",self.primask as u8);
+                  }else{
+                     dbg_ln!("warn cannot disable/enable interrupts while inprivileged");
+                     if self.trace_enabled{
+                        self.trace.push_str("warn cannot disable/enable interrupts while inprivileged\n");
+                     }
+                  }
                   return Ok(instr_size.in_bytes() as i32);
                },
 
@@ -2106,8 +2195,11 @@ impl System{
                      s,y
                   );
 
-                  if special.needs_privileged_access() && !self.in_privileged_mode(){
-                     println!("Do not have access rights to {:?} in {:?} mode",special,self.mode);
+                  if special.needs_privileged_access(RegAccess::WRITE) && !self.in_privileged_mode(){
+                     println!("Do not have WRITE access to {:?} in {:?} mode",special,self.mode);
+                     if self.trace_enabled{
+                        self.trace.push_str(&format!("Do not have access rights to {:?} in {:?} mode\n",special,self.mode));
+                     }
                      return Ok(instr_size.in_bytes() as i32);
                   }
 
@@ -2124,16 +2216,69 @@ impl System{
                         let mut cr = from_arm_bytes(self.control_register); 
                         if matches!(self.mode,Mode::Thread){
                            //can only only change the sp_sel bit in thread mode
+                           //thus handlers cannot change the SP alias 
                            cr = cr | (src_value & 3);
                         }else{
+                           if src_value & 2 > 0{
+                              dbg_ln!("WARN: cannot set CONTROL.SP_SEL in HANDLER mode");
+                              if self.trace_enabled{
+                                 self.trace.push_str("WARN: cannot set CONTROL.SP_SEL in HANDLER mode\n");
+                              }
+                           }
                            cr = cr | (src_value & 1);
                         }
                         self.control_register = into_arm_bytes(cr);
                      },
-                     _ => todo!("MSR for {:?} has not been implemented yet",special)
+                     SpecialRegister::PRIMASK =>{
+                        self.primask = src_value & 1 > 0;
+                     },
+                     xpsr_registers!() =>{
+                        let xpsr = src_value & special.mask();
+                        self.xpsr = into_arm_bytes(xpsr);
+                     }
                   }
 
                   return Ok(instr_size.in_bytes() as i32);
+               },
+
+               Opcode::_32Bit(B32::MRS)=>{
+                  let (dest,special) = unpack_operands!(
+                     operands,
+                     Operands::MRS,
+                     a,b
+                  );
+
+                  assert!(dest.0 != 13 && dest.0 != 15,"MRS for R13 and R15 is UNDEFINED");
+                  let v = if special.needs_privileged_access(RegAccess::READ) && !self.in_privileged_mode(){
+                     println!("Do not have READ access to {:?} in {:?} mode",special,self.mode);
+                     if self.trace_enabled{
+                        self.trace.push_str(&format!("Do not have READ access rights {:?} in {:?} mode\n",special,self.mode));
+                     }
+
+                     0
+                  }else{
+                     match special{
+                        xpsr_registers!() => {
+                           let xpsr = from_arm_bytes(self.xpsr);
+                           xpsr & (SpecialRegister::IAPSR.mask())
+                        },
+                        SpecialRegister::MSP => self.registers.sp_main,
+                        SpecialRegister::PSP => self.registers.sp_process,
+                        SpecialRegister::PRIMASK => {
+                           if self.in_privileged_mode(){
+                              self.primask as u32
+                           }else{
+                              0
+                           }
+                        },
+                        SpecialRegister::CONTROL => {
+                           from_arm_bytes(self.control_register)
+                        },
+                     }
+                  };
+
+                  self.do_move(dest.0 as usize, v)?;
+                  Ok(instr_size.in_bytes() as i32)
                },
 
                Opcode::_32Bit(B32::BR_AND_LNK) => {
@@ -2151,11 +2296,20 @@ impl System{
                   println!("executing {}, {}",instr_32b,offset);
                   return Ok(offset);
                },
+
+               Opcode::_32Bit(B32::DMB) | Opcode::_32Bit(B32::DSB) | Opcode::_32Bit(B32::ISB)=>{
+                  dbg_ln!("INFO: pipelining is not emulated; barrier instructions are NOPs");
+                  if self.trace_enabled{
+                     self.trace.push_str("INFO: pipelining is not emulated; barrier instructions are NOPs\n");
+                  }
+                  return Ok(instr_size.in_bytes() as i32);
+               },
+
                Opcode::_32Bit(B32::UNDEFINED) => {
                   println!("WARN: execution of the UDF instructions will result in a hardfault");
-                  return Err(ArmException::HardFault(String::from("execution of a UDF.32 instruction is undefined")));
+                  return Err(ArmException::HardFault(String::from("execution of a UDF.W instruction is undefined")));
                },
-               _ => todo!("{:?} has not been implemented yet",instr_32b)
+               Opcode::_16Bit(op) => panic!("ERR: simulator decoded 16bit {:?} but anticipated instruction size was 32 bits",op)
             }
          }
       }
@@ -2216,6 +2370,39 @@ impl System{
       return Ok(());
    }
 
+
+   fn check_unprivileged_permission(&self, addr: u32, acc: Access)->Result<(),ArmException>{
+      let (attributes,exec_never) = self.get_permissions(addr);
+      let err_msg = Err(ArmException::HardFault(
+            format!("Invalid attempt to {:?} at address {:#x}, :{:#x} is {}",
+            acc,
+            addr,
+            addr,
+            attributes)
+         )
+      );
+      let level = attributes.unprivileged;
+      match acc{
+        Access::READ => match level{
+           AccessPermission::NoAccess=> err_msg,
+           _ => Ok(())
+        },
+        Access::WRITE => match level{
+           AccessPermission::NoAccess | AccessPermission::ReadOnly => err_msg,
+           _ => Ok(())
+        },
+        Access::Execute => if exec_never {
+           Err(ArmException::HardFault(format!("cannot execute instruction at {:#x} it is marked as XN",addr)))
+        }else{
+           match level {
+              AccessPermission::NoAccess => err_msg,
+              _ => Ok(())
+           }
+        },
+      }
+
+   }
+
    pub fn check_permission(&self, addr: u32, acc: Access)->Result<(),ArmException>{
       let (attributes,exec_never) = self.get_permissions(addr);
       let err_msg = Err(ArmException::HardFault(
@@ -2259,6 +2446,12 @@ impl System{
    ///bool is the execute never flag
    #[inline]
    pub fn default_permissions(&self, addr: u32)->(MemPermission,bool){
+      if is_region_ppb(addr){
+         return (MemPermission{
+            privileged: AccessPermission::ReadAndWrite,
+            unprivileged: AccessPermission::NoAccess
+         },true);
+      }
       let sig = (addr & 0xE0000000) >> 29;
       match sig{
          0b000 => (MemPermission::full_access(),false),
@@ -2331,6 +2524,9 @@ fn write_to_memory_mapped_register(sys: &mut System, address: u32, v: u32)->Resu
 
 fn load_memory_mapped_register(sys: &System, address: u32)->Result<u32,ArmException>{
    assert!(is_region_ppb(address));
+   if !sys.in_privileged_mode(){
+      return Err(ArmException::HardFault("Access to PPB must be privileged".into()));
+   }
    fault_if_not_aligned(address, 4)?;
    let system_register = MemoryMappedRegister::from_address(address).unwrap();
    return Ok(system_register.read(sys));
@@ -2359,6 +2555,31 @@ pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],Arm
       return Ok(mem);
    }
 }
+
+pub fn load_memory_unprivileged<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],ArmException>{
+   if is_region_ppb(v_addr){
+      if T == 4{
+         let v = load_memory_mapped_register(sys,v_addr)?;
+         let mem_arr = into_arm_bytes(v);
+         let mem: [u8;T] = mem_arr[0 .. T]
+            .try_into()
+            .expect("these are definately the same size");
+
+         return Ok(mem);
+      }else{
+         return Err(ArmException::HardFault("Reads from PPB must be word aligned".into()));
+      }
+   }else{
+      fault_if_not_aligned(v_addr, T)?;
+      sys.check_unprivileged_permission(v_addr, Access::READ)?;
+      //let mem: [u8;T] = sys.memory[v_addr as usize .. (v_addr as usize + T)]
+      //   .try_into()
+      //   .expect("should not access out of bounds memory");
+      let mem = sys.alloc.get(v_addr);
+      return Ok(mem);
+   }
+}
+
 
 pub fn load_thumb_instr(sys: &System, v_addr: u32)->Result<[u8;2],ArmException>{
    fault_if_not_aligned(v_addr, 2)?;
