@@ -3,7 +3,7 @@ use std::{fmt::Display, sync::{Mutex, Arc}, ops::{Deref, DerefMut}, path::{Path,
 use iced::{widget::{pane_grid, PaneGrid, text, column, container, scrollable, row, button, vertical_slider::StyleSheet, pick_list, image, tooltip, mouse_area, Row}, Application, Theme, executor, Command, Element, futures::StreamExt};
 use iced::widget::text_input;
 
-use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self, write_memory}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol, TextPosition}, binutils::{from_arm_bytes_16b, u32_to_arm_bytes}, elf::decoder::SymbolDefinition, to_arm_bytes};
+use crate::{system::{System, ArmException, simulator::{HaltType, Simulator}, registers::Registers, self, write_memory}, asm::interpreter::{print_assembly, disasm_text, is_segment_mapping_symbol, TextPosition, SymbolTable}, binutils::{from_arm_bytes_16b, u32_to_arm_bytes}, elf::decoder::SymbolDefinition, to_arm_bytes};
 
 use crate::system::instructions::{
    negative_flag_u32,
@@ -198,14 +198,24 @@ macro_rules! parse_hex_or_base10 {
    }
 }
 
-fn stringify_slice(mut offset: u32, arr: &[u8], cast: Cast)->String{
+fn stringify_slice(mut offset: u32, arr: &[u8], cast: Cast, symbols: &Vec<SymbolDefinition>)->String{
    let mut display = String::new();
+   let mut table = SymbolTable::create(symbols);
+   let add_symbol = |tbl: &mut SymbolTable<'_>, address: u32,display: &mut String|{
+      if let Some(label) = tbl.lookup_ignore_functions(address as usize){
+         display.push('<');
+         display.push_str(label);
+         display.push_str(">:\n");
+      }
+   };
+   use crate::asm::interpreter::INDENT;
    match cast{
       Cast::UWORD => {
          for word in arr.chunks_exact(4){
             let byte_pair: [u8;4] = word.try_into().expect("always 4 byte arr");
             let native = from_arm_bytes(byte_pair);
-            display.push_str(&format!("{:#010X}: {}\n",offset,native));
+            add_symbol(&mut table, offset, &mut display);
+            display.push_str(&format!("{}{:#010X}: {}\n",INDENT,offset,native));
             offset += 4;
          }
       },
@@ -213,7 +223,8 @@ fn stringify_slice(mut offset: u32, arr: &[u8], cast: Cast)->String{
          for word in arr.chunks_exact(4){
             let byte_pair: [u8;4] = word.try_into().expect("always 4 byte arr");
             let native = from_arm_bytes(byte_pair);
-            display.push_str(&format!("{:#010X}: {}\n",offset,native as i32));
+            add_symbol(&mut table, offset, &mut display);
+            display.push_str(&format!("{}{:#010X}: {}\n",INDENT,offset,native as i32));
             offset += 4;
          }
       },
@@ -221,25 +232,29 @@ fn stringify_slice(mut offset: u32, arr: &[u8], cast: Cast)->String{
          for hw in arr.chunks_exact(2){
             let byte_pair: [u8;2] = hw.try_into().expect("always 2 byte arr");
             let native = from_arm_bytes_16b(byte_pair);
-            display.push_str(&format!("{:#010X}: {}\n",offset,native as u16));
+            add_symbol(&mut table, offset, &mut display);
+            display.push_str(&format!("{}{:#010X}: {}\n",INDENT,offset,native as u16));
             offset += 2;
          }
      },
       Cast::IHALF => for hw in arr.chunks_exact(2){
          let byte_pair: [u8;2] = hw.try_into().expect("always 2 byte arr");
          let native = from_arm_bytes_16b(byte_pair);
-            display.push_str(&format!("{:#010X}: {}\n",offset,native as i16));
+            add_symbol(&mut table, offset, &mut display);
+            display.push_str(&format!("{}{:#010X}: {}\n",INDENT,offset,native as i16));
             offset += 2;
       },
       Cast::UBYTE => {
          for byte in arr{
-            display.push_str(&format!("{:#010X}: {}\n",offset,*byte));
+            add_symbol(&mut table, offset, &mut display);
+            display.push_str(&format!("{}{:#010X}: {}\n",INDENT,offset,*byte));
             offset += 1;
          }
       }
       Cast::IBYTE => {
          for byte in arr{
-            display.push_str(&format!("{:#010X}: {}\n",offset,*byte as i8));
+            add_symbol(&mut table, offset, &mut display);
+            display.push_str(&format!("{}{:#010X}: {}\n",INDENT,offset,*byte as i8));
             offset += 1;
          }
       },
@@ -682,7 +697,7 @@ fn pane_render<'a>(
 
                         //let data = &sys.memory[real_start ..= real_end];
                         let data = sys.alloc.view(real_start,real_end);
-                        let string_data = stringify_slice(real_start,&data, view.view_cast.clone());
+                        let string_data = stringify_slice(real_start,&data, view.view_cast.clone(), &app.symbols);
                         scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
                      },
                      Err(_) => {

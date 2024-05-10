@@ -2,7 +2,7 @@ use crate::{asm::decode::{Opcode,B16}, elf::decoder::{LiteralPools, SymbolDefini
 use crate::dbg_ln;
 use super::{decode_operands::{get_operands, pretty_print, get_operands_32b, Operands}, decode::{instruction_size, InstructionSize, B32}};
 
-const INDENT: &str = "   ";
+pub const INDENT: &str = "   ";
 
 pub struct SymbolTable<'a>{
    symbols: &'a Vec<SymbolDefinition>,
@@ -51,16 +51,20 @@ impl<'a> SymbolTable<'a>{
 
    //TODO consider the case when multiple symbols have the same address value
    pub fn lookup(&mut self, address: usize)->Option<&String>{
-      return self.progressive_lookup(address);
+      return self.progressive_lookup(address,true);
+   }
+
+   pub fn lookup_ignore_functions(&mut self, address: usize)->Option<&String>{
+      return self.progressive_lookup(address,false);
    }
    
 
-   fn progressive_lookup(&mut self, address: usize)->Option<&String>{
+   fn progressive_lookup(&mut self, address: usize, search_for_thumb_funcs: bool)->Option<&String>{
       if self.cursor >= self.symbols.len(){
          return None;
       }
 
-      if address % 2 == 0 {
+      if search_for_thumb_funcs && address % 2 == 0 {
          let thumb_address = address | 1;
          let mut idx = self.symbols.partition_point(|sym| sym.position <= thumb_address);
          idx -= 1;
