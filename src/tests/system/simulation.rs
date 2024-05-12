@@ -611,6 +611,99 @@ pub fn should_support_stack()->Result<(), std::io::Error>{
 }
 
 #[test]
+pub fn support_exceptions_with_privelage_levels()->Result<(),std::io::Error>{
+   let elf = write_asm_make_elf(
+      "./assembly_tests/priv_exceptions.s",
+      concat!(
+         ".thumb\n",
+         ".text\n",
+         ".equ _STACK_SIZE,0x20\n",
+         ".global _entry_point\n",
+         "_vector_table:\n",
+         "   .4byte _SP_RESET_VAL\n",
+         "   .4byte _reset_handler\n",
+         "   .4byte _nmi_handler\n",
+         ".thumb_func\n",
+         "_reset_handler:\n",
+         "   BKPT\n",
+         ".thumb_func\n",
+         "_nmi_handler:\n",
+         "PUSH {LR}\n",
+         "POP {PC}\n",
+
+         "_entry_point:\n",
+            "MOV r4,#3\n",
+            "MSR CONTROL,r4\n",
+            "NOP\n",
+            "POP {PC}\n",
+         "_STACK_START:\n",
+         "   .align 3\n",
+         "   .fill _STACK_SIZE,1,0\n",
+         "_SP_RESET_VAL:\n",
+         "   .size _SP_RESET_VAL, . - _STACK_START\n"
+      ).as_bytes()
+   )?;
+
+   let mut ld_script = File::create("./assembly_tests/priv_exceptions.ld")?;
+   ld_script.write_all(
+      format!(
+         "ENTRY(_entry_point);\n\
+         SECTIONS{{\n\
+            \t. = 0x0;\n\
+            \t.text : {{*(.text)}}\n\
+         }}\n"
+      ).as_bytes()
+   )?;
+
+   let linked = Path::new("./assembly_tests/priv_exceptions.out");
+   link_elf(&linked, &elf, Path::new("./assembly_tests/priv_exceptions.ld"));
+
+   run_elf(&linked, |entry_point, code|{
+      let mut sys = load_code_into_system(entry_point, code)?;
+
+      sys.registers.sp_main = 0x100;
+      sys.registers.sp_process = 0x200;
+      sys.control_register = into_arm_bytes(3);
+      let e = ArmException::Nmi;
+      let i = sys.step()?; //POP {PC}
+      sys.offset_pc(i)?;
+
+      let i = sys.step()?; //POP {PC}
+      sys.offset_pc(i)?;
+
+      sys.active_exceptions[e.number() as usize] = ExceptionStatus::Pending;
+
+
+      let (o_msp,o_psp) = (sys.registers.sp_main,sys.registers.sp_process);
+      assert_eq!(sys.get_sp(),o_psp);
+      step(&mut sys);
+      assert!(matches!(
+         sys.active_exceptions[e.number() as usize],
+         ExceptionStatus::Active
+      ));
+
+      step(&mut sys);
+      assert!(matches!(
+         sys.active_exceptions[e.number() as usize],
+         ExceptionStatus::Active
+      ));
+
+      step(&mut sys);
+      assert!(matches!(
+         sys.active_exceptions[e.number() as usize],
+         ExceptionStatus::Inactive
+      ));
+
+      assert_eq!(o_msp,sys.registers.sp_main);
+      assert_eq!(o_psp,sys.registers.sp_process);
+
+      Ok(())
+   })?;
+   Ok(())
+
+}
+
+#[test]
 pub fn support_exceptions()->Result<(),std::io::Error>{
    let elf = write_asm_make_elf(
       "./assembly_tests/basic_exception.s",
@@ -1249,6 +1342,7 @@ pub fn sys_timer_test()->Result<(),std::io::Error>{
       |entry_point,code|{
          let mut sys = load_code_into_system(entry_point, code)?;
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          assert!(matches!(
             sys.active_exceptions[ArmException::SysTick.number() as usize],
@@ -1260,8 +1354,10 @@ pub fn sys_timer_test()->Result<(),std::io::Error>{
          assert_eq!(sys.scs.tick_interrupt_isr,false);
 
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          println!("clock_reset:={}",sys.scs.clock_reset);
          println!("clock_value:={}",sys.scs.clock_value);
@@ -1270,10 +1366,13 @@ pub fn sys_timer_test()->Result<(),std::io::Error>{
 
 
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
 
          assert_eq!(sys.scs.clock_value,0);
@@ -1287,18 +1386,21 @@ pub fn sys_timer_test()->Result<(),std::io::Error>{
 
 
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          assert!(!sys.scs.tick_interrupt_isr);
          assert!(!sys.scs.sys_timer_enabled);
 
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          assert!(!sys.scs.tick_interrupt_isr);
          assert!(sys.scs.sys_timer_enabled);
          println!("enabled system timer");
-         assert_eq!(sys.scs.clock_value,0);
+         assert_eq!(sys.scs.clock_value,7);
          assert!(sys.scs.unread_systick);
          assert!(matches!(
             sys.active_exceptions[ArmException::SysTick.number() as usize],
@@ -1308,55 +1410,57 @@ pub fn sys_timer_test()->Result<(),std::io::Error>{
          );
 
          let i = sys.step()?;
-         assert_eq!(sys.scs.clock_value,7);
+         assert!(sys.check_for_exceptions(i).is_none());
+         assert_eq!(sys.scs.clock_value,6);
          sys.offset_pc(i)?;
          assert!(sys.scs.unread_systick);
          assert!(!sys.scs.tick_interrupt_isr);
          assert!(sys.scs.sys_timer_enabled);
 
          let i = sys.step()?;
-         assert_eq!(sys.scs.clock_value,6);
+         assert!(sys.check_for_exceptions(i).is_none());
+         assert_eq!(sys.scs.clock_value,5);
          assert!(sys.scs.tick_interrupt_isr);
          assert!(sys.scs.unread_systick);
          sys.offset_pc(i)?;
 
          let i = sys.step()?;
-         assert_eq!(sys.scs.clock_value,5);
+         assert!(sys.check_for_exceptions(i).is_none());
+         assert_eq!(sys.scs.clock_value,4);
          assert!(!sys.scs.unread_systick);
          sys.offset_pc(i)?;
 
          let i = sys.step()?;
-         sys.offset_pc(i)?;
-         assert_eq!(sys.scs.clock_value,4);
-
-         let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          assert_eq!(sys.scs.clock_value,3);
-         assert!(!sys.scs.unread_systick);
 
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          assert_eq!(sys.scs.clock_value,2);
          assert!(!sys.scs.unread_systick);
 
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          assert_eq!(sys.scs.clock_value,1);
          assert!(!sys.scs.unread_systick);
 
          let i = sys.step()?;
+         assert!(sys.check_for_exceptions(i).is_none());
          sys.offset_pc(i)?;
          assert_eq!(sys.scs.clock_value,0);
          assert!(!sys.scs.unread_systick);
 
-         match sys.step(){
-            Ok(_) => panic!("write to SYST_CVR should trigger systick exception"),
-            Err(e) => {
-               assert!(matches!(e,ArmException::SysTick));
-               assert!(sys.scs.unread_systick);
-               assert_eq!(sys.scs.clock_value,7);
-            },
-         }
+         sys.step()?;
+         //spoof VTOR 
+         sys.registers.sp_main = 0x100;
+         let tick = ArmException::SysTick;
+         sys.alloc.put(sys.scs.vtor + (4 * tick.number()),into_arm_bytes(1));
+         assert_eq!(sys.check_for_exceptions(i),Some(ArmException::SysTick.number()));
+         assert!(sys.scs.unread_systick);
+         assert_eq!(sys.scs.clock_value,7);
          Ok(())
       }
    )?;

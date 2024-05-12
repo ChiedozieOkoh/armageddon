@@ -32,7 +32,8 @@ pub struct System{
    pub alloc: BlockAllocator,
    pub reset_cfg: Option<ResetCfg>,
    pub vtor_override: Option<u32>,
-   locked_up: bool
+   locked_up: bool,
+   pub error_msg: String
 }
 
 pub struct ResetCfg{
@@ -228,6 +229,7 @@ impl System{
          reset_cfg: None,
          vtor_override: None,
          locked_up: false,
+         error_msg: String::new()
       }
    }
 
@@ -249,7 +251,8 @@ impl System{
          alloc: BlockAllocator::fill(text),
          reset_cfg: None,
          vtor_override: None,
-         locked_up: false
+         locked_up: false,
+         error_msg: String::new()
       }
    }
 
@@ -289,7 +292,8 @@ impl System{
          alloc: BlockAllocator::init(memory),
          reset_cfg: None,
          vtor_override: None,
-         locked_up: false
+         locked_up: false,
+         error_msg: String::new()
       }
    }
 
@@ -327,11 +331,30 @@ impl System{
    fn set_sp_select_bit(&mut self, bit: bool){
       let mut sp_sel = from_arm_bytes(self.control_register);
       sp_sel = if bit{
+         println!("SPSEL set");
          sp_sel | 0x2
       }else{
+         println!("SPSEL cleared");
          sp_sel & (!(0x2))
       };
       self.control_register = into_arm_bytes(sp_sel);
+   }
+
+   fn set_sp_with(&mut self,in_mode: &Mode,sp_select: bool, v: u32)->Result<(),ArmException>{
+      fault_if_not_aligned(v, 4)?;
+      if sp_select{
+         match in_mode{
+            Mode::Thread => {
+               println!("set SP process = {}",v);
+               self.registers.sp_process = v
+            },
+            Mode::Handler => panic!("process SP is unavailable while in handler mode"),
+         }
+      }else{
+         println!("set SP main = {}",v);
+         self.registers.sp_main = v
+      }
+      Ok(())
    }
 
    pub fn get_sp(&self)->u32{
@@ -354,7 +377,7 @@ impl System{
       if self.sp_select_bit(){
          match self.mode{
             Mode::Thread => {
-               println!("set process SP");
+               println!("set process SP:= {}({:#x}) ctrl reg = [{}{}]",v,v,self.sp_select_bit() as u32,self.get_npriv() as u32);
                self.registers.sp_process = v; 
                return Ok(());
             },
@@ -420,7 +443,7 @@ impl System{
       if (addr & 0xF0000000 == 0xF0000000) && matches!(self.mode, Mode::Handler){
          match self.exception_return(addr){
             Ok(exc_n) => {
-               dbg_ln!("returned from {} exception ",exception_name(exc_n));
+               println!("returned from {} exception ",exception_name(exc_n));
                if self.trace_enabled{
                   self.trace.push_str(&format!("returned from {} exception ",exception_name(exc_n)));
                   self.trace.push('\n');
@@ -433,7 +456,18 @@ impl System{
                   self.trace.push('\n');
                };
                println!("ERR: {:?} occured during exception return",e);
-               self.lockup();
+               let extended_msg = match e{
+                  ArmException::HardFault(ref _msg) => {
+                     if !_msg.is_empty(){ Some(_msg) }else{None}
+                  },
+                  _ => {None}
+               };
+               let mut lockup_msg = format!("ERR: {} occured during exception return",exception_name(e.number()));
+               if let Some(content) = extended_msg{
+                  lockup_msg.push_str(": ");
+                  lockup_msg.push_str(&content);
+               }
+               self.lockup(&lockup_msg);
                return Err(e);
             }
          }
@@ -494,10 +528,12 @@ impl System{
       return Ok(new_addr);
    }
 
-   fn lockup(&mut self){
+   fn lockup(&mut self,error_msg: &str){
       self.registers.pc = 0xFFFFFFFE;
       self.locked_up = true;
-      println!("locked up at priority lvl:  {}",self.execution_priority(self.primask,&self.scs));
+      println!("locked up at priority lvl: {} [{}]",self.execution_priority(self.primask,&self.scs),error_msg);
+      self.error_msg.clear();
+      self.error_msg.push_str(error_msg);
    }
 
    pub fn set_exc_pending(&mut self, exc: ArmException){
@@ -513,19 +549,24 @@ impl System{
          _ => {}
       }
       match exc{
-         ArmException::HardFault(msg) => {
+         ArmException::HardFault(ref msg) => {
             if !msg.trim().is_empty(){
                //println!("HARDFAULT PENDING: {}",msg);
+               if self.trace_enabled{
+                  self.trace.push_str("hardfault now pending: ");
+                  self.trace.push_str(msg);
+                  self.trace.push('\n');
+               }
             }
          },
-         ArmException::SysTick=> {
-            println!("SysTick pending");
-         }
          _ => {}
       }
    }
 
    pub fn check_for_exceptions(&mut self,offset: i32)->Option<u32>{
+      if let Err(_) = self.scs.clock_tick(&self.mode){
+         self.set_exc_pending(ArmException::SysTick);
+      }
       let mut maybe_taken: Option<ArmException> =  None; 
       for i in 0 .. self.active_exceptions.len(){
          match &self.active_exceptions[i]{
@@ -556,17 +597,24 @@ impl System{
                     println!("error during exception entry {:?}",derived_exc);
                     let current_priority = self.execution_priority(self.primask, &self.scs);
                     if current_priority == -1 || current_priority == -2{
-                       self.lockup();
+                       let mut lock_msg = format!("derived {} on exception entry", exception_name(derived_exc.number()));
+                       if let Some(_m) = derived_exc.error_msg(){
+                          lock_msg.push_str(_m);
+                       }
+                       self.lockup(&lock_msg);
                     }else{
                        self.set_exc_pending(derived_exc.clone());
                        if derived_exc.priority_group(&self.scs) < current_priority{
-                          let possible_err = format!("derived {:?} pending",derived_exc);
+                          let dn = derived_exc.number();
                           match self.init_exception(derived_exc,offset){
                              Ok(n) => return n,
                              Err(e) => {
+                                let mut lock_msg = format!("failed to enter derived exception {} ",exception_name(dn));
+                                if let Some(_m) = e.error_msg(){
+                                   lock_msg.push_str(_m);
+                                }
                                 self.set_exc_pending(e);
-                                //dbg_ln!("failed to enter derived exception {} will lockup",possible_err);
-                                self.lockup();
+                                self.lockup(&lock_msg);
                              },
                           }
                        }
@@ -686,8 +734,8 @@ impl System{
       from_arm_bytes(self.xpsr) & 0x3F
    }
 
-
    fn jump_to_exception(&mut self, exc_type: &ArmException)->Result<i32, ArmException>{
+      println!("[jump-to-exception] starting branch process");
       self.mode = Mode::Handler;
       self.set_ipsr(&exc_type);
       self.set_sp_select_bit(false);
@@ -711,7 +759,7 @@ impl System{
 
    fn load_context_frame(&mut self,exc_return_address: u32)->Result<(),ArmException>{
       let frame_ptr = self.get_sp();
-      dbg_ln!("using SP={:#x} for exception return",frame_ptr);
+      println!("in {:?} mode : using SP={:#x} for exception return",self.mode,frame_ptr);
       let r0: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr)?}else{load_memory(self,frame_ptr)?};
       let r1: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 4)?}else{load_memory(self,frame_ptr + 4)?};
       let r2: [u8;4] = if self.get_npriv(){load_memory_unprivileged(self,frame_ptr + 8)?}else{load_memory(self,frame_ptr + 8)?};
@@ -745,6 +793,7 @@ impl System{
       );
       let frame_alignment =  frame_xpsr & 0x200 > 0;
       let new_sp = (self.get_sp() + 0x20) | (frame_alignment as u32 >> 3);
+      println!("new SP computed for exception exit = {:#x}",new_sp);
       self.set_sp(new_sp)?;
       let new_xpsr = if matches!(self.mode,Mode::Thread) && self.get_npriv(){
          println!("forced into thread mode");
@@ -752,6 +801,7 @@ impl System{
       }else{
          0xF100003F & frame_xpsr
       };
+      println!("SP={:#x}({}) after loaded context frame ",self.get_sp(),self.get_sp());
       self.xpsr = into_arm_bytes(new_xpsr);
       return Ok(());
    }
@@ -835,6 +885,7 @@ impl System{
          Mode::Handler => assert!(self.get_ipsr() != 0, "Handler mode must mean IPSR > 0 "),
       }
 
+      println!("loaded context frame: current SP = {}",self.get_sp());
       self.event_register = true;
       return Ok(handled_exception);
    }
@@ -872,15 +923,9 @@ impl System{
    }
 
    pub fn step(&mut self)->Result<i32, ArmException>{
+      println!("ctrl before step: [{}{}]",self.sp_select_bit()as u32,self.get_npriv() as u32);
       if self.locked_up{
          return Ok(0);
-      }
-
-      if let Err(e) =  self.scs.clock_tick(){
-         if matches!(self.active_exceptions[e.number() as usize],ExceptionStatus::Active){
-            println!("WARN: late arriving systick may cause a tight loop that starves other threads and handlers");
-         }
-         return Err(e);
       }
 
       let maybe_code: [u8;2] = load_thumb_instr(&self, self.registers.pc as u32)?;
@@ -1125,6 +1170,7 @@ impl System{
                      imm.0
                   );
 
+                  println!("incremented SP");
                   self.set_sp(sum)?;
 
                   return Ok(instr_size.in_bytes() as i32);
@@ -1142,6 +1188,7 @@ impl System{
                      self.read_any_register(src.0)
                   );
 
+                  println!("incremented SP by REG");
                   self.set_sp(sum)?;
 
                   return Ok(instr_size.in_bytes() as i32);
@@ -1362,6 +1409,7 @@ impl System{
                Opcode::_16Bit(B16::SUB_SP_Imm7)=>{
                   let imm7 = unpack_operands!(operands,Operands::SP_SUB,a);
                   let (sum,_) = subtract(self.get_sp(), imm7.0);
+                  println!("SUBtracted SP");
                   self.set_sp(sum)?;
                   return Ok(instr_size.in_bytes() as i32);
                }
@@ -1952,13 +2000,16 @@ impl System{
                Opcode::_16Bit(B16::SVC)=> {
                   let priority = self.execution_priority(self.primask, &self.scs);
                   if priority == -1 || priority == -2{
-                     self.lockup();
+                     let mut error_msg: String = "SVC exceptions are not permissible when running at priority lvl ".into();
+                     error_msg.push_str(&priority.to_string());
+                     self.lockup(&error_msg);
                      Ok(0)
                   }else{
                      if priority < ArmException::Svc.priority_group(&self.scs){
-                        Err(ArmException::HardFault("SVC priority escalation fault".into()))
+                        Err(ArmException::HardFault("SVC priority escalation fault, SVC could not preempt execution".into()))
                      }else{
-                        Err(ArmException::Svc)
+                        self.set_exc_pending(ArmException::Svc);
+                        Ok(instr_size.in_bytes() as i32)
                      }
                   }
                },
@@ -2029,11 +2080,12 @@ impl System{
                      }else {
                         self.registers.generic[reg_bit as usize]
                      };
-                     println!("PUSH wrote {:?} to {}",into_arm_bytes(v), addr);
+                     println!("PUSH wrote {:?} to {:#x}",into_arm_bytes(v), addr);
                      write_memory(self, addr, into_arm_bytes(v))?;
                      addr = addr + 4;
                   }
 
+                  println!("PUSH edited SP");
                   self.set_sp(new_sp)?;
                   return Ok(instr_size.in_bytes() as i32);
                },
@@ -2045,13 +2097,14 @@ impl System{
                      Operands::RegisterList,
                      a
                   ); 
-                  println!("SP before POP {}",self.get_sp());
+                  println!("SP before POP {:#x}",self.get_sp());
                   let set_bits = get_set_bits(list);
                   let old_sp = self.get_sp() + (4 * set_bits.len() as u32);
                   let mut addr = self.get_sp();
+                  let (initial_mode,initial_sp_sel) = (self.mode.clone(),self.sp_select_bit());
                   for reg_bit in set_bits{
                      let v = load_memory::<4>(self,addr)?;
-                     println!("POP loaded {:?} to r{} from addr {}", v, reg_bit, addr);
+                     println!("POP loaded {:?} to r{} from addr {:#x}", v, reg_bit, addr);
                      if reg_bit == asm::PROGRAM_COUNTER{
                         offset = self.bx_interworking_pc_offset(from_arm_bytes(v))?;
                      }else{
@@ -2060,7 +2113,7 @@ impl System{
                      addr += 4;
                   }
 
-                  self.set_sp(old_sp)?;
+                  self.set_sp_with(&initial_mode,initial_sp_sel,old_sp)?;
                   return Ok(offset);
                },
 
@@ -2348,7 +2401,10 @@ impl System{
          0 ..=12 => { 
             self.registers.generic[dest] = value;
          },
-         asm::STACK_POINTER => { self.set_sp(value)? },
+         asm::STACK_POINTER => { 
+            println!("MOV moved to SP");
+            self.set_sp(value)?
+         },
          asm::LINK_REGISTER => { self.registers.lr = value }
          asm::PROGRAM_COUNTER => {panic!("simulator error: cannot 'do_move' on PC")}
          _ => {unreachable!("cannot do move to unaccesible GP register")}
@@ -2695,6 +2751,13 @@ impl ArmException{
          14 => Some(Self::PendSV),
          15 => Some(Self::SysTick),
          n  => Some(Self::ExternInterrupt(n))
+      }
+   }
+
+   pub fn error_msg(&self)->Option<&String>{
+      match self{
+         ArmException::HardFault(msg) => Some(&msg),
+         _ => None
       }
    }
 
@@ -3119,15 +3182,24 @@ impl SystemControlSpace{
       dbg_ln!("cleared SYST_CSR.COUNTFLAG");
    }
 
-   pub fn clock_tick(&mut self)->Result<(),ArmException>{
-      dbg_ln!("clock value = {}",self.clock_value);
+   pub fn clock_tick(&mut self,mode: &Mode)->Result<(),ArmException>{
+      dbg_ln!("clock value before tick = {}",self.clock_value);
       if self.clock_value == 0 && self.sys_timer_enabled{
          self.clock_value = self.clock_reset;
          self.unread_systick = true;
-         if self.tick_interrupt_isr{ Err(ArmException::SysTick) }else{ Ok(()) }
+         if self.tick_interrupt_isr{ 
+            if matches!(mode,Mode::Thread){
+               Err(ArmException::SysTick) 
+            }else{
+               println!("clock tick ignored");
+               Ok(())
+            }
+         }else{ Ok(()) }
       }else{
          if self.sys_timer_enabled{
-            self.clock_value -= 1;
+            if matches!(mode,Mode::Thread){
+               self.clock_value -= 1;
+            }
          }
          Ok(())
       }

@@ -62,8 +62,8 @@ impl Simulator{
          },
          Err(e) => {
             let offset = match e{
-                ArmException::Svc => 2,
-                _ => 0
+                ArmException::HardFault(_) => 0,
+                _ => panic!("simulator error: {:?} caused simualator to abandon instruction execution, but that should only occur when a hardfault occurs",e)
             };
             sys.set_exc_pending(e);
             sys.check_for_exceptions(offset);

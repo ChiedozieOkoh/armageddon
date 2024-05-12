@@ -1,8 +1,8 @@
 /target
 /assembly_tests
 a.out
-*.s
-*.out
-*.o
+/*.s
+/*.out
+/*.o
 elf_samples/
 dump_state.*
