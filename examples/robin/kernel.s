@@ -163,8 +163,6 @@ _pendsv_handler:
 
    .setup_next_task:
       LDR r0, =_tcb_hdr_struct
-      MOV r4,r0
-      ADD r4,#72
       LDR r1, [r0,#4]
       CMP r1, #0xFF
       BEQ .init_active_tcb_pointer
@@ -181,6 +179,7 @@ _pendsv_handler:
          SUB r1,#4
          MOV r3,#2
          ADD r1,#36
+         PUSH {r5,r6}
          LDR r5,=_tcb_vec_end
          .find_next_in_use_tcb:
             CMP r3,#0
@@ -219,6 +218,7 @@ _pendsv_handler:
 
                ADD r0,r1,#4
                MRS r1,PSP
+               POP {r5,r6}
                BL .copy_context_frame_from_r0_to_r1
                POP {PC}
 
