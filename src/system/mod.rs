@@ -539,11 +539,11 @@ impl System{
    pub fn set_exc_pending(&mut self, exc: ArmException){
       match self.active_exceptions[exc.number() as usize]{
          ExceptionStatus::Inactive => {
-            println!("{} upgraded Inactive -> Pending",exception_name(exc.number()));
+            println!("{}(priority: {}) upgraded Inactive -> Pending",exception_name(exc.number()),exc.priority_group(&self.scs));
             self.active_exceptions[exc.number() as usize] = ExceptionStatus::Pending;
          },
          ExceptionStatus::Active=>{
-            println!("{} upgraded Active -> ActiveAndPending",exception_name(exc.number()));
+            println!("{}(priority: {}) upgraded Active -> ActiveAndPending",exception_name(exc.number()),exc.priority_group(&self.scs));
             self.active_exceptions[exc.number() as usize] = ExceptionStatus::ActiveAndPending;
          }
          _ => {}
@@ -632,14 +632,14 @@ impl System{
 
    fn init_exception(&mut self, exc_type: ArmException, offset: i32)->Result<Option<u32>,ArmException>{
       if self.execution_priority(self.primask,&self.scs) < exc_type.priority_group(&self.scs){
-         println!("{:?} exception will remain pending",exc_type);
+         println!("{:?}(priority: {}) exception will remain pending",exc_type,exc_type.priority_group(&self.scs));
          self.active_exceptions[exc_type.number() as usize] = ExceptionStatus::Pending;
          self.scs.set_vec_pending(exc_type.number());
          return Ok(None);
       }else{
-         println!("initialising {:?} exception",exc_type);
+         println!("initialising {:?}(priority: {}) exception",exc_type,exc_type.priority_group(&self.scs));
          if self.trace_enabled{
-            self.trace.push_str(&format!("initialising {:?} exception",exc_type));
+            self.trace.push_str(&format!("initialising {:?}(priority: {}) exception",exc_type,exc_type.priority_group(&self.scs)));
             self.trace.push('\n');
          }
          //TODO once true async interrupts are supported check for late arriving async exceptions here

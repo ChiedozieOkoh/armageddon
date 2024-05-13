@@ -63,6 +63,13 @@ _reset_handler:
 
       MSR PSP,r0
 
+   .lower_pendsv_priority:
+      .set SCS_SHPR3,0xE000ED20 
+      LDR r1,=SCS_SHPR3
+      .set PENDSV_PRI,0x00C00000
+      LDR r2,=PENDSV_PRI
+      STR r2, [r1]
+      
    .descalate_threads: //has to run last becuase we need elevated privelages to do system configuration
       MOV r4,#3
       MSR CONTROL,r4
@@ -222,11 +229,13 @@ _pendsv_handler:
          ADD r0,#12
          MRS r1,PSP
       .copy_context_frame_from_r0_to_r1:
+         PUSH {r5}
          MOV r5,r1
          LDM r0!,{r1-r4}
          STM r5!,{r1-r4}
          LDM r0!,{r1-r4}
          STM r5!,{r1-r4}
+         POP {r5}
          BX LR
 
 .thumb_func
