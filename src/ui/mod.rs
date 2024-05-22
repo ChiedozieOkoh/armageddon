@@ -1012,7 +1012,11 @@ impl Application for App{
             }
             self.diasm_windows.focus_if_present(&self.focused_pane);
             self.diasm_windows.remove_pane(&pane);
+
             self.memview_windows.focus_if_present(&self.focused_pane);
+            if let Some(i) = self.memview_windows.id_of(&pane){
+               self.explorer_map.remove(i);
+            }
             self.memview_windows.remove_pane(&pane);
             self._state.close(&pane);
             self.n_panes -= 1;
