@@ -24,19 +24,18 @@ pub struct App{
    n_panes: usize,
    focused_pane: pane_grid::Pane,
    diasm_windows: Window,
+   memview_windows: Window,
+   explorer_map: ExplorerMap,
    entry_point: usize,
    pub disasm: String,
    register_hex_display: [bool;13],
    searchbar: Option<SearchBar>,
    symbols: Vec<SymbolDefinition>,
-   mem_view: Option<MemoryView>,
    sys_view: SystemView,
    sync_sys: Arc<Mutex<System>>,
    cmd_sender: Option<iced_mpsc::Sender<Event>>,
    breakpoints: Vec<u32>,
    view_error: Option<String>,
-   pending_mem_start: String,
-   pending_mem_end: String,
    trace_record: String,
    update_view: bool,
    bkpt_input: BkptInput
@@ -278,13 +277,12 @@ impl Display for Cast{
     }
 }
 
-struct MemoryView{
+#[derive(Clone)]
+pub struct MemoryView{
    pub start: u32, 
    pub end: u32,
    pub view_cast: Cast,
    //pub entry_cast: Cast,
-   pub raw_entry_data: String,
-   pub sanitised_entry: Vec<u8>
 }
 
 impl Default for MemoryView{
@@ -294,8 +292,6 @@ impl Default for MemoryView{
          end: 0xFFFF,
          view_cast: Cast::UBYTE,
          //entry_cast: Cast::UBYTE,
-         raw_entry_data: String::new(),
-         sanitised_entry: Vec::new()
       }
    }
 }
@@ -664,18 +660,19 @@ fn pane_render<'a>(
          let def= MemoryView{
             start: 0,
             end: 32,
-            view_cast: Cast::UBYTE,
-            raw_entry_data: String::new(),
-            sanitised_entry: Vec::new()
+            view_cast: Cast::UBYTE
          };
-         let view = app.mem_view.as_ref().unwrap_or_else(|| {&def});
+         let wid = app.memview_windows.id_of(id).unwrap();
+         let view = app.explorer_map.view_of(wid).unwrap_or_else(|| {&def});
+         let pend_start = app.explorer_map.get_start(wid).unwrap_or_else(|| "start (hex)".into());
+         let pend_end = app.explorer_map.get_end(wid).unwrap_or_else(|| "end (hex)".into());
          let inputs = row(vec![
-            text_input("start (hex)",&app.pending_mem_start)
+            text_input("start (hex)",&pend_start)
                .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetStart(s))))
                .on_submit(Event::Ui(Gui::Exp(Explorer::Update)))
                .into(),
 
-            text_input("end (hex)",&app.pending_mem_end)
+            text_input("end (hex)",&pend_end)
                .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetEnd(s))))
                .on_submit(Event::Ui(Gui::Exp(Explorer::Update)))
                .into(),
@@ -685,7 +682,10 @@ fn pane_render<'a>(
          ]);
          //println!("should update view {}",app.update_view);
          let text_box = if app.view_error.is_some(){
-               scrollable(text(app.view_error.as_ref().unwrap()).size(TEXT_SIZE).width(iced::Length::Fill))
+               scrollable(text(app.view_error.as_ref().unwrap())
+                  .size(TEXT_SIZE)
+                  .width(iced::Length::Fill))
+                  .id(app.memview_windows.id_of(id).unwrap().clone())
             }else{
                if app.update_view{
                   match app.sync_sys.try_lock(){
@@ -699,14 +699,17 @@ fn pane_render<'a>(
                         let data = sys.alloc.view(real_start,real_end);
                         let string_data = stringify_slice(real_start,&data, view.view_cast.clone(), &app.symbols);
                         scrollable(text(&string_data).size(TEXT_SIZE).width(iced::Length::Fill))
+                           .id(app.memview_windows.id_of(id).unwrap().clone())
                      },
                      Err(_) => {
                         println!("could not acquire dbg thread lock!!!");
                         scrollable(text("...").size(TEXT_SIZE).width(iced::Length::Fill))
+                           .id(app.memview_windows.id_of(id).unwrap().clone())
                      },
                   }
                }else{
                   scrollable(text("... press enter to update view").size(TEXT_SIZE).width(iced::Length::Fill))
+                     .id(app.memview_windows.id_of(id).unwrap().clone())
                }
             };
 
@@ -786,6 +789,8 @@ impl Application for App{
          focused_pane: def,
          n_panes: 1,
          diasm_windows: windows,
+         memview_windows: Window::create(),
+         explorer_map: ExplorerMap::create(),
          sync_sys: sync_sys_arc,
          disasm: disassembly,
          entry_point,
@@ -793,11 +798,8 @@ impl Application for App{
          register_hex_display: [false;13],
          sys_view: starting_view,
          cmd_sender: None,
-         mem_view: None,
          searchbar: None,
          breakpoints: Vec::new(),
-         pending_mem_start: "start (hex)".into(),
-         pending_mem_end: "end (hex)".into(),
          update_view: false,
          view_error: None,
          trace_record: String::new(),
@@ -960,6 +962,10 @@ impl Application for App{
                      let _  = self.diasm_windows.add_pane(new_pane.clone());
                      self.diasm_windows.focus_if_present(&new_pane);
                   },
+                  PaneType::MemoryExplorer =>{
+                     let _ = self.memview_windows.add_pane(new_pane.clone());
+                     self.memview_windows.focus_if_present(&new_pane);
+                  },
                   _ => {}
                }
                self.focused_pane = new_pane;
@@ -985,6 +991,8 @@ impl Application for App{
                }
                self.diasm_windows.focus_if_present(&self.focused_pane);
                self.diasm_windows.remove_pane(&old_focus);
+               self.memview_windows.focus_if_present(&self.focused_pane);
+               self.memview_windows.remove_pane(&old_focus);
                self._state.close(&old_focus);
                self.n_panes -=1;
             }
@@ -1004,12 +1012,15 @@ impl Application for App{
             }
             self.diasm_windows.focus_if_present(&self.focused_pane);
             self.diasm_windows.remove_pane(&pane);
+            self.memview_windows.focus_if_present(&self.focused_pane);
+            self.memview_windows.remove_pane(&pane);
             self._state.close(&pane);
             self.n_panes -= 1;
          },
 
          Event::Ui(Gui::FocusPane(pane))=>{
             self.diasm_windows.focus_if_present(&pane);
+            self.memview_windows.focus_if_present(&pane);
             self.focused_pane = pane;
          },
 
@@ -1074,137 +1085,80 @@ impl Application for App{
          },
 
          Event::Ui(Gui::Exp(Explorer::Update)) => { 
-            match parse_hex(&self.pending_mem_start){
-               Some(v) => {
-                  match self.mem_view{
-                    Some(ref mut current) => current.start = v,
-                    None => {
-                       let mut new_view = MemoryView::default();
-                       new_view.start = v;
-                       new_view.end = if v == u32::MAX{ u32::MAX }else{ v + 1 };
-                       self.mem_view = Some(new_view);
-                    },
+            if let Some(cur_id) = self.memview_windows.get_focused_pane(){
+               let wid = cur_id.clone();
+               let pend_start = self.explorer_map.get_start(&wid).unwrap_or_else(||"start (hex) ".into());
+               let pend_view = self.explorer_map.mut_view_entry(wid.clone());
+               match parse_hex(&pend_start){
+                  Some(v) => {
+                     pend_view.and_modify(|pv| pv.start = v).or_insert({
+                          let mut new_view = MemoryView::default();
+                          new_view.start = v;
+                          new_view.end = if v == u32::MAX{ u32::MAX }else{ v + 1 };
+                          new_view
+                     });
+                     self.update_view = true;
+                     self.view_error = None;
+                  },
+                  None => {
+                     println!("should report error");
+                     self.view_error = Some(format!("could not parse '{}' as a hexadecimal",&pend_start));
                   }
-                  self.update_view = true;
-                  self.view_error = None;
-               },
-               None => {
-                  println!("should report error");
-                  self.view_error = Some(format!("could not parse '{}' as a hexadecimal",&self.pending_mem_start));
+               }
+
+               let pend_end = self.explorer_map.get_end(&wid);
+               if pend_end.is_some(){
+                  let pend_view = self.explorer_map.mut_view_entry(wid.clone());
+                  match parse_hex(&pend_end.clone().unwrap()){
+                     Some(v) => {
+                        pend_view.and_modify(|pv| pv.end = v).or_insert({
+                           let mut new_view = MemoryView::default();
+                           new_view.end = v;
+                           new_view.start = if v == 0 {0}else{ v - 1 };
+                           new_view
+                        });
+                        self.update_view = true;
+                        self.view_error = None;
+                     },
+                     None => {
+                        println!("should report error");
+                        self.view_error = Some(format!("could not parse '{}' as a hexadecimal",&pend_end.unwrap()));
+                     }
+                  }
                }
             }
 
-            match parse_hex(&self.pending_mem_end){
-               Some(v) => {
-                  match self.mem_view{
-                    Some(ref mut current) => current.end = v,
-                    None => {
-                       let mut new_view = MemoryView::default();
-                       new_view.end = v;
-                       new_view.start = if v == 0 {0}else{ v - 1 };
-                       self.mem_view = Some(new_view);
-                    },
-                  }
-                  self.update_view = true;
-                  self.view_error = None;
-               },
-               None => {
-                  println!("should report error");
-                  self.view_error = Some(format!("could not parse '{}' as a hexadecimal",&self.pending_mem_end));
-               }
-            }
-
-            match self.mem_view{
-                Some(ref mut v) => {
-                   let trimmed = v.raw_entry_data.trim();
-                   if !trimmed.is_empty(){
-                      match self.sync_sys.try_lock(){
-                         Ok(mut sys) => {
-                            let mut address = v.start;
-                            if trimmed.contains(char::is_whitespace){
-                               for values in trimmed.split_whitespace(){
-                                  match v.view_cast{
-                                     Cast::UWORD => {
-                                        let maybe_word = parse_hex_or_base10!(u32, values, values.starts_with("0x"));
-                                        match maybe_word{
-                                           Some(word)=> {
-                                              let bytes = to_arm_bytes!(u32,word);
-                                              let r = write_memory(sys.deref_mut().into(), address, bytes);
-                                              match r{
-                                                 Ok(_) => address += 4,
-                                                 Err(e) => {
-                                                    Simulator::register_exceptions(sys.deref_mut().into(), e.clone());
-                                                    if e.is_fault(){
-                                                       match e{
-                                                          ArmException::HardFault(msg) => {
-                                                             let mut err_msg = String::from("Could not complete memory write due to hardfault\n");
-                                                             err_msg.push_str(&msg);
-                                                             self.view_error = Some(err_msg)
-                                                          },
-                                                          _ => {self.view_error = Some(String::from("could not complete memory write due to fault"));}
-                                                       }
-                                                       break;
-                                                    }
-                                                 },
-                                              }
-                                           },
-                                           None => {}
-                                        }
-
-                                        address += 4;
-                                     },
-                                     Cast::IWORD => {
-                                     },
-                                     Cast::UHALF => {
-                                     },
-                                     Cast::IHALF => {
-                                     },
-                                     Cast::UBYTE => {
-                                     },
-                                     Cast::IBYTE => {
-                                     },
-                                  }
-                               }
-                            }else{
-                            }
-                         },
-                         Err(_) => println!("cannot edit memory in continue mode"),
-                      }
-                   }
-                },
-                None => {},
-            }
          },
 
          Event::Ui(Gui::Exp(Explorer::SetStart(s))) => {
-            self.pending_mem_start = s;
+            //self.pending_mem_start = s;
+            if let Some(st) = self.memview_windows.get_focused_pane(){
+               let working_id = st.clone();
+               self.explorer_map.start_string(working_id, s);
+            }
             self.update_view = false;
          },
 
          Event::Ui(Gui::Exp(Explorer::SetEnd(e))) => {
-            self.pending_mem_end = e;
+            //self.pending_mem_end = e;
+            if let Some(st) = self.memview_windows.get_focused_pane(){
+               let working_id = st.clone();
+               self.explorer_map.end_string(working_id, e);
+            }
             self.update_view = false;
          },
 
          Event::Ui(Gui::Exp(Explorer::SetViewCast(c))) => {
-            match self.mem_view{
-               Some(ref mut current) => current.view_cast = c,
-               None => {
+            if let Some(st) = self.memview_windows.get_focused_pane(){
+
+               let working_id = st.clone();
+               if self.explorer_map.view_of(&working_id).is_some(){
+                  self.explorer_map.mut_view_of(&working_id).unwrap().view_cast = c;
+               }else{
                   let mut new_view = MemoryView::default();
                   new_view.view_cast = c;
-                  self.mem_view = Some(new_view);
-               },
-            }
-         },
-
-         Event::Ui(Gui::Exp(Explorer::SetEntry(e)))=> {
-            match self.mem_view{
-               Some(ref mut current) => current.raw_entry_data = e,
-               None => {
-                  let mut new_view = MemoryView::default();
-                  new_view.raw_entry_data = e;
-                  self.mem_view = Some(new_view);
-               },
+                  self.explorer_map.set_view(working_id, new_view);
+               }
             }
          },
 
@@ -1423,7 +1377,7 @@ fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
 use iced::futures::channel::mpsc as iced_mpsc;
 use iced::futures::sink::SinkExt;
 
-use self::{searchbar::SearchBar, window::Window}; 
+use self::{searchbar::SearchBar, window::{Window, ExplorerMap}}; 
 #[derive(Debug,Clone)]
 pub enum Debug{
    Halt(HaltType),
@@ -1464,7 +1418,6 @@ pub enum Explorer{
    SetStart(String),
    SetEnd(String),
    SetViewCast(Cast),
-   SetEntry(String),
    Update,
 }
 

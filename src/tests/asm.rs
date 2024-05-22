@@ -1176,6 +1176,16 @@ fn should_recognise_nop()->Result<(),std::io::Error>{
 
    assert_eq!(Opcode::_16Bit(B16::NOP),encoding_t2);
    assert!(get_operands(&Opcode::_16Bit(B16::NOP),[bytes[0],bytes[1]]).is_none());
+
+   let bytes = assemble_by(
+      path,
+      b".text\n.thumb\nNOP\n",
+      asm_file_to_elf_armv6m
+   ).unwrap();
+   let encoding_t2: Opcode = ([bytes[0],bytes[1]]).into();
+
+   assert_eq!(Opcode::_16Bit(B16::NOP),encoding_t2);
+   assert!(get_operands(&Opcode::_16Bit(B16::NOP),[bytes[0],bytes[1]]).is_none());
    Ok(())
 }
 

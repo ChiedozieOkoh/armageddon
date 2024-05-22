@@ -239,7 +239,7 @@ impl fmt::Display for Opcode{
 impl From<HalfWord> for Opcode{
    fn from(hw: HalfWord)->Self{
       let code = match hw{
-         [0x00,0xBF] => Some(Opcode::_16Bit(B16::NOP)),
+         [0x00,0xBF] | [0xC0,0x46] => Some(Opcode::_16Bit(B16::NOP)),
          [0x40,0xBF] => Some(Opcode::_16Bit(B16::SEV)),
          [0x20,0xBF] => Some(Opcode::_16Bit(B16::WFE)),
          [0x30,0xBF] => Some(Opcode::_16Bit(B16::WFI)),

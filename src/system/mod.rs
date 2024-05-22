@@ -569,20 +569,17 @@ impl System{
       }
       let mut maybe_taken: Option<ArmException> =  None; 
       for i in 0 .. self.active_exceptions.len(){
-         match &self.active_exceptions[i]{
-            ExceptionStatus::Pending => {
-               if i < 16 || (self.scs.is_nvic_interrupt_enabled(i as u32 - 16)){
-                  let exc = ArmException::from_exception_number(i as u32).unwrap();
-                  if maybe_taken.is_none(){
-                     maybe_taken = Some(exc);
-                  }else if exc.priority_group(&self.scs) < maybe_taken.as_ref().unwrap().priority_group(&self.scs){
-                     maybe_taken = Some(exc);
-                  }
-               }else{
-                  dbg_ln!("WARN: disabled interrupt {} cannot become active",i);
+         if let ExceptionStatus::Pending = &self.active_exceptions[i]{
+            if i < 16 || (self.scs.is_nvic_interrupt_enabled(i as u32 - 16)){
+               let exc = ArmException::from_exception_number(i as u32).unwrap();
+               if maybe_taken.is_none(){
+                  maybe_taken = Some(exc);
+               }else if exc.priority_group(&self.scs) < maybe_taken.as_ref().unwrap().priority_group(&self.scs){
+                  maybe_taken = Some(exc);
                }
-            },
-            _ => {}
+            }else{
+               dbg_ln!("WARN: disabled interrupt {} cannot become active",i);
+            }
          }
       }
 
@@ -2224,6 +2221,11 @@ impl System{
                },
                
                Opcode::_16Bit(B16::UNDEFINED)=>{
+                  let priority = self.execution_priority(self.primask, &self.scs);
+                  if priority == -1 || priority == -2{
+                     self.lockup("the UDF instruction is not permitted at priority level -1 or -2");
+                     return Ok(0);
+                  }
                   println!("WARN: execution of the UDF instructions will result in a hardfault");
                   return Err(ArmException::HardFault(String::from("execution of a UDF instruction is undefined")));
                },
@@ -2359,6 +2361,11 @@ impl System{
                },
 
                Opcode::_32Bit(B32::UNDEFINED) => {
+                  let priority = self.execution_priority(self.primask, &self.scs);
+                  if priority == -1 || priority == -2{
+                     self.lockup("the UDF instruction is not permitted at priority level -1 or -2");
+                     return Ok(0);
+                  }
                   println!("WARN: execution of the UDF instructions will result in a hardfault");
                   return Err(ArmException::HardFault(String::from("execution of a UDF.W instruction is undefined")));
                },
