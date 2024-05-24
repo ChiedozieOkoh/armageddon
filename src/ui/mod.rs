@@ -289,8 +289,8 @@ impl Default for MemoryView{
    fn default() -> Self {
       Self{
          start: 0,
-         end: 0xFFFF,
-         view_cast: Cast::UBYTE,
+         end: 0xFF,
+         view_cast: Cast::UWORD,
          //entry_cast: Cast::UBYTE,
       }
    }
@@ -657,15 +657,11 @@ fn pane_render<'a>(
       },
 
       PaneType::MemoryExplorer => {
-         let def= MemoryView{
-            start: 0,
-            end: 32,
-            view_cast: Cast::UBYTE
-         };
+         let def = MemoryView::default();
          let wid = app.memview_windows.id_of(id).unwrap();
          let view = app.explorer_map.view_of(wid).unwrap_or_else(|| {&def});
-         let pend_start = app.explorer_map.get_start(wid).unwrap_or_else(|| "start (hex)".into());
-         let pend_end = app.explorer_map.get_end(wid).unwrap_or_else(|| "end (hex)".into());
+         let pend_start = app.explorer_map.get_start(wid).unwrap_or_else(|| "".into());
+         let pend_end = app.explorer_map.get_end(wid).unwrap_or_else(|| "".into());
          let inputs = row(vec![
             text_input("start (hex)",&pend_start)
                .on_input(|s| Event::Ui(Gui::Exp(Explorer::SetStart(s))))
@@ -777,8 +773,9 @@ impl Application for App{
    type Executor = executor::Default;
 
    fn new(args: Self::Flags)->(Self,Command<Event>){
-      let (state,def) = pane_grid::State::new(PaneType::Disassembler);
+      let (mut state,def) = pane_grid::State::new(PaneType::Disassembler);
       
+      state.split(pane_grid::Axis::Vertical,&def,PaneType::SystemState);
       let (sys,entry_point, symbols, disassembly) = args;
       let starting_view: SystemView = (&sys).into();
       let sync_sys_arc = Arc::new(Mutex::new(sys));
@@ -787,7 +784,7 @@ impl Application for App{
       (Self{
          _state: state,
          focused_pane: def,
-         n_panes: 1,
+         n_panes: 2,
          diasm_windows: windows,
          memview_windows: Window::create(),
          explorer_map: ExplorerMap::create(),
@@ -892,14 +889,14 @@ impl Application for App{
                   let mut continue_mode = true;
                   while continue_mode{
                      let mut sys = async_copy.lock().unwrap();
-                     if sys.on_breakpoint(){
-                        continue_mode = false;
-                        halt = Some(HaltType::breakpoint);
-                     }else{
-                        match Simulator::step_or_signal_halt_type(&mut sys){
-                           Ok(_)=> {},
-                           Err(e) => {continue_mode = false; halt = Some(e);}
-                        }
+                     match Simulator::step_or_signal_halt_type(&mut sys){
+                        Ok(_)=> {
+                           if sys.on_breakpoint(){
+                              continue_mode = false;
+                              halt = Some(HaltType::breakpoint);
+                           }
+                        },
+                        Err(e) => {continue_mode = false; halt = Some(e);}
                      }
                      match rcvr.try_next(){
                         Ok(event) => match event{
@@ -1073,18 +1070,8 @@ impl Application for App{
          },
 
          Event::Ui(Gui::CentreDisassembler)=>{
-            let ir = self.sys_view.raw_ir;
-            //let mut ir_ln = 0_u32;
-            //let mut line_number = 0_u32;
-            let (ir_ln,total_lines) = get_pc_text_position(&self.disasm,ir);
-            let y_ratio = (ir_ln as f32) / total_lines as f32;
-            dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
-            if let Some(id) = self.diasm_windows.get_focused_pane(){
-               println!("snapping to {:?}",id);
-               cmd = iced::widget::scrollable::snap_to(
-                  id.clone(),
-                  scrollable::RelativeOffset { x: 0.0, y: y_ratio }
-               );
+            if let Some(c) = centre_disassembler(&self.diasm_windows, &self.disasm, self.sys_view.raw_ir){
+               cmd = c;
             }
          },
 
@@ -1278,6 +1265,9 @@ impl Application for App{
             let sys = self.sync_sys.try_lock().unwrap();
             self.trace_record = sys.trace.clone();
             self.sys_view = sys.deref().into();
+            if let Some(c) = centre_disassembler(&self.diasm_windows, &self.disasm, self.sys_view.raw_ir){
+               cmd = c;
+            }
          }
          _ => todo!()
       }
@@ -1371,6 +1361,24 @@ fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
       line_number += 1;
    }
    (ir_ln,line_number)
+}
+
+fn centre_disassembler(dis_windows: &Window, disasm: &String,ir: u32)->Option<iced::Command<Event>>{
+   //let mut ir_ln = 0_u32;
+   //let mut line_number = 0_u32;
+   let (ir_ln,total_lines) = get_pc_text_position(disasm,ir);
+   let y_ratio = (ir_ln as f32) / total_lines as f32;
+   dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
+   if let Some(id) = dis_windows.get_focused_pane(){
+      println!("snapping to {:?}",id);
+      let cmd = iced::widget::scrollable::snap_to(
+         id.clone(),
+         scrollable::RelativeOffset { x: 0.0, y: y_ratio }
+      );
+      return Some(cmd);
+   }else{
+      return None;
+   }
 }
 
 /*pub enum Breakpoint{
