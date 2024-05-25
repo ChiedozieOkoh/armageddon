@@ -393,12 +393,17 @@ fn highlight_or_default<'a>(target: &String,line: &str, search_result: &Vec<Text
 }
 */
 
-fn highlight_search_result<'a>(target: &String,line: &str,current_result: &TextPosition, _focus: bool, normal_font: Option<(iced::Color,iced::Font)>)->Row<'a,Event,iced::Renderer>{
-   let offset = current_result.line_offset;
-   let hl_len = target.len();
+fn highlight_region<'a>(line: &str,start: usize, len: usize, _focus: bool, normal_font: Option<(iced::Color,iced::Font)>)->Row<'a,Event,iced::Renderer>{
+   let offset = start;
+   let hl_len = len;
+   println!("highlighting within '{}'",line);
+   println!("highlight range {} -> {}",offset,offset+hl_len);
    let hl_region = line.get(offset .. offset + hl_len).unwrap();
+   println!("will highlight '{}'",hl_region);
    let before = line.get(.. offset);
    let after =  line.get(offset + hl_len ..);
+   println!("before substr {:?}, after substr {:?}",before,after);
+
    let mut text_box = Row::new();
    let highlight_clr = if _focus{
       iced::color!(0,0,100)
@@ -464,32 +469,16 @@ fn pane_render<'a>(
             return Some(r[counter].line_number);
          };
 
-         let highlighted = app.disasm.lines().take(1).next().unwrap();
-         let c_search_result = current_search_result(&search_results,sr_idx);
-         let text_widget: Row<Event>= if highlighted.contains("<"){
-            row![text(highlighted).size(TEXT_SIZE).style(iced::color!(100,0,0))]
-         }else if c_search_result.is_some_and(|sr| sr == line_number){
-            println!("for search term '{}'",app.searchbar.as_ref().unwrap().target);
-            println!("current search result ptr {:?}",c_search_result);
-            let current = sr_idx;
-            let focused = app.searchbar.as_ref().unwrap().is_nth_term_focused(current);
-            sr_idx += 1;
-            highlight_search_result(&app.searchbar.as_ref().unwrap().target, highlighted, &search_results[current], focused, None)
-         }else{
-            row![text(highlighted).size(TEXT_SIZE)]
-         };
-
-         line_number += 1;
-         let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![text_widget];
+         let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![];
          text_box = text_box.spacing(0).padding(0).height(iced::Length::Shrink);
 
-         for line in app.disasm.lines().skip(1){
+         for line in app.disasm.lines(){
             if !line.trim().is_empty(){
                let offset = line.split(":").next().unwrap();
                let addr = u32::from_str_radix(
                   offset.trim().trim_start_matches("0x").trim(),
                   16
-                  ).unwrap();
+               ).unwrap();
 
                let on_symbol = line.contains("<");
                let on_exec_intr = addr == ir;
@@ -506,35 +495,103 @@ fn pane_render<'a>(
                }else{
                   iced::color!(0,0,0)
                };
+
+               let bkpt_end = line.find(':').unwrap();
+               let (bkpt_area,rest_of_line) = line.split_at(bkpt_end);
                let current = current_search_result(&search_results,sr_idx);
                let inner_text  = if current.is_some_and(|sr| sr == line_number){
                   let focused = app.searchbar.as_ref()
                      .unwrap()
                      .is_nth_term_focused(sr_idx);
 
-                  let v = highlight_search_result(
-                     &app.searchbar.as_ref().unwrap().target,
-                     line,
-                     &search_results[sr_idx],
-                     focused,
-                     Some((normal_colour,normal_font))
+                  let len = app.searchbar.as_ref().unwrap().target.len();
+                  println!("bkpt end: {}",bkpt_end);
+                  if search_results[sr_idx].line_offset < bkpt_end{
+                     println!("calc = {} result len = {}",bkpt_end - search_results[sr_idx].line_offset,len);
+                     let bkpt_hi_end = std::cmp::min(
+                        (search_results[sr_idx].line_offset ..search_results[sr_idx].line_offset + len).len(),
+                        (search_results[sr_idx].line_offset ..bkpt_end).len(),
                      );
-                  sr_idx += 1;
-                  v
+                     let bkpt_highlighted = highlight_region(
+                        bkpt_area,
+                        search_results[sr_idx].line_offset,
+                        bkpt_hi_end,
+                        focused,
+                        Some((normal_colour,normal_font))
+                     );
+
+                     let other_highlighted: Element<Event> = if search_results[sr_idx].line_offset + len > bkpt_end{
+                        println!("term doesnt fit inside breakpoint");
+                        let rem_len = (search_results[sr_idx].line_offset + len) - bkpt_end;
+                        highlight_region(
+                           rest_of_line, 
+                           0,
+                           rem_len,
+                           focused,
+                           Some((normal_colour,normal_font))
+                        ).into()
+                     }else{
+                        println!("term fits inside breakpoint");
+                        text(rest_of_line)
+                           .size(TEXT_SIZE)
+                           .style(normal_colour)
+                           .width(iced::Length::Fill)
+                           .font(normal_font)
+                           .into()
+                     };
+                     sr_idx += 1;
+                     row![
+                        inlay_button_ref(
+                           bkpt_highlighted.into(),
+                           Event::Ui(Gui::SubmitGuiBkpt(addr)),
+                           on_breakpoint
+                        ),
+                        other_highlighted
+                     ]
+                  }else{
+                     let render = row![
+                        inlay_button_ref(
+                           text(bkpt_area)
+                              .size(TEXT_SIZE)
+                              .style(normal_colour)
+                              .width(iced::Length::Shrink)
+                              .font(normal_font).into(),
+                           Event::Ui(Gui::SubmitGuiBkpt(addr)),
+                           on_breakpoint
+                        ),
+                        highlight_region(
+                           rest_of_line,
+                           search_results[sr_idx].line_offset - bkpt_end,
+                           len,
+                           focused,
+                           Some((normal_colour,normal_font))
+                        )
+                     ];
+                     sr_idx += 1;
+                     render
+                  }
                }else{
-                  let inter = text(line)
-                     .size(TEXT_SIZE)
-                     .style(normal_colour)
-                     .width(iced::Length::Fill)
-                     .font(normal_font);
                   row![
-                     inter
+                     inlay_button_ref(
+                        text(bkpt_area)
+                           .size(TEXT_SIZE)
+                           .style(normal_colour)
+                           .width(iced::Length::Shrink)
+                           .font(normal_font).into(),
+                        Event::Ui(Gui::SubmitGuiBkpt(addr)),
+                        on_breakpoint
+                     ),
+                     text(rest_of_line)
+                        .size(TEXT_SIZE)
+                        .style(normal_colour)
+                        .width(iced::Length::Fill)
+                        .font(normal_font)
                   ]
                };
 
-               let msg = Event::Ui(Gui::SubmitGuiBkpt(addr));
-               let rendered_line = inlay_button_ref(inner_text.into(), msg, on_breakpoint );
-               text_box = text_box.push(rendered_line);
+               //let msg = Event::Ui(Gui::SubmitGuiBkpt(addr));
+               //let rendered_line = inlay_button_ref(inner_text.into(), msg, on_breakpoint );
+               text_box = text_box.push(inner_text);
             }else{
                text_box = text_box.push(text("\n"));
             }
@@ -1064,8 +1121,32 @@ impl Application for App{
             sb.target = sb.pending.clone();
             //let sys = self.sync_sys.try_lock().unwrap();
             match sb.find(&self.disasm){
-                Ok(_) => {},
-                Err(e) => println!("error occured during search {:?}",e),
+               Ok(_) => {
+                  let _ = self.searchbar.as_mut().unwrap().focus_next();
+                  let maybe_position = self.searchbar.as_ref()
+                     .unwrap()
+                     .get_focused_search_result();
+
+                  match maybe_position{
+                     Some(position) => {
+                        let total_lines = self.disasm.lines().count();
+                        let ratio = position.line_number as f32 / total_lines as f32;
+                        dbg_ln!("estimated ratio {} / {} =  {}",
+                           position.line_number,
+                           total_lines,
+                           ratio
+                        );
+                        if let Some(id) = self.diasm_windows.get_focused_pane(){
+                           cmd = iced::widget::scrollable::snap_to(
+                              id.clone(),
+                              scrollable::RelativeOffset { x: 0.0, y: ratio }
+                           );
+                        }
+                     },
+                     None => println!("no matches found"),
+                  }
+               },
+               Err(e) => println!("error occured during search {:?}",e),
             }
          },
 
