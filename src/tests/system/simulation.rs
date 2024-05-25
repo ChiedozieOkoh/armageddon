@@ -1899,7 +1899,6 @@ fn step(sys: &mut System ){
                 Err(e) => {
 
                    let offset = match e{
-                      ArmException::Svc => 2,
                       _ => 0
                    };
                    sys.set_exc_pending(e);
@@ -1910,7 +1909,6 @@ fn step(sys: &mut System ){
       },
       Err(e)=>{
          let offset = match e{
-             ArmException::Svc => 2,
              _ => 0
          };
          sys.set_exc_pending(e);
@@ -2049,18 +2047,51 @@ fn fuzzy_testsuite()->Result<(),ElfError>{
             std::fs::write("elf_samples/fuzzy/failed/hardware_run",&output)?;
             fail_count += 1;
             if generate_new_case{
-               update_fuzzy_stats(test_count, fail_count);
+               //update_fuzzy_stats(test_count, fail_count);
             }
             panic!("state inconsistency");
          }
-
          step(&mut sys);
+
       }
+
+      let final_hw_state: &[u32;PROC_VARIABLES]  = states[states.len() - PROC_VARIABLES ..states.len()]
+            .try_into()
+            .expect("should be 18 registers");
+
+         if !are_states_equal(&sys, final_hw_state){
+            println!("ERROR: State inconsistency");
+            println!("real hardware state");
+            println!("{:?}",final_hw_state);
+            println!("simulator hardware state");
+            println!("{:?}",vec![
+               sys.registers.generic[0],
+               sys.registers.generic[1],
+               sys.registers.generic[2],
+               sys.registers.generic[3],
+               sys.registers.generic[4],
+               sys.registers.generic[5],
+               sys.registers.generic[6],
+               sys.registers.generic[7],
+               sys.registers.generic[8],
+               sys.registers.generic[9],
+               sys.registers.generic[10],
+               sys.registers.generic[11],
+               sys.registers.generic[12],
+               sys.registers.sp_main,
+               sys.registers.sp_process,
+               sys.registers.lr,
+               sys.registers.pc as u32,
+               from_arm_bytes(sys.xpsr)
+            ]);
+            std::fs::write("elf_samples/fuzzy/failed/hardware_run",&output)?;
+            panic!("state inconsistency");
+         }
    }
 
 
    if generate_new_case{
-      update_fuzzy_stats(test_count, fail_count);
+      //update_fuzzy_stats(test_count, fail_count);
    }
    Ok(())
 }

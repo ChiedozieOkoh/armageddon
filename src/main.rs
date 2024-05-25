@@ -98,6 +98,9 @@ fn gui_diasm(){
       println!("system boot type: MANUAL");
    }
 
+   //println!("spoofing PI RESETS DONE register");
+   //sys.alloc.put(0x4000c008, [0xFF,0xFF,0xFF,1]);
+
    sys.trace_enabled = true;
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
    let mut msg = String::new(); 

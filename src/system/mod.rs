@@ -428,7 +428,7 @@ impl System{
          return Ok(());
       }
       let new_addr = Self::offset_read_pc(self.registers.pc as u32,offset)?;
-      println!("pc {0}({0:x}) -> {1}({1:x})",self.registers.pc,new_addr);
+      dbg_ln!("pc {0}({0:x}) -> {1}({1:x})",self.registers.pc,new_addr);
       self.registers.pc = new_addr as usize;
       return Ok(());
    }
@@ -920,7 +920,7 @@ impl System{
    }
 
    pub fn step(&mut self)->Result<i32, ArmException>{
-      println!("ctrl before step: [{}{}]",self.sp_select_bit()as u32,self.get_npriv() as u32);
+      dbg_ln!("ctrl before step: [{}{}]",self.sp_select_bit()as u32,self.get_npriv() as u32);
       if self.locked_up{
          return Ok(0);
       }
@@ -1075,7 +1075,8 @@ impl System{
                   
                   let base = self.read_pc_word_aligned();
 
-                  let offset: u32 = (imm8.0 as u32) << 2;
+                  dbg_ln!("PC={}({:#x}) for ADR",base,base);
+                  let offset: u32 = (imm8.0 as u32);
                   let v = base + offset;
 
                   self.registers.generic[dest.0 as usize] = v;
@@ -1199,10 +1200,10 @@ impl System{
                   );
 
                   if cond_passed(self.xpsr, &code){
-                     println!("{} == true",&code);
+                     dbg_ln!("{} == true",&code);
                      return Ok(offset);
                   }else{
-                     println!("{} == false",&code);
+                     dbg_ln!("{} == false",&code);
                      return Ok(instr_size.in_bytes() as i32);
                   }
 
@@ -2869,7 +2870,7 @@ impl MemoryMappedRegister{
          0xE000ED1C =>{ Some(Self::shpr2) },
          0xE000ED20 =>{ Some(Self::shpr3) },
          _ => {
-            println!("WARN: {:#x} has no associated system register in the PPB space",address);
+            dbg_ln!("WARN: {:#x} has no associated system register in the PPB space",address);
             None
          }
       }
