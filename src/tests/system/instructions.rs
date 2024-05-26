@@ -1,12 +1,11 @@
 use crate::binutils::{BitField, clear_extra_64b};
 use crate::system::instructions::{add_with_carry, asr, ConditionFlags};
 
-#[test] #[ignore]
+#[test] 
 pub fn adc_should_detect_unsigned_overflow_with_carry_bit(){
-   let a: BitField<3> = 0x7_u32.into();// there are 3 bits to represent a and b as numbers
-   let b: BitField<3> = 0x1_u32.into();
 
-   let (sum,carry,overflow) = add_with_carry::<3>(a, b, 0);
+   let (sum,carry,overflow) = add_with_carry::<32>(
+      BitField::<32>(u32::MAX.into()), BitField::<32>(0_u32.into()), 1);
 
    assert_eq!(sum,0);
    assert_eq!(carry,true);
@@ -16,11 +15,12 @@ pub fn adc_should_detect_unsigned_overflow_with_carry_bit(){
 #[test]
 pub fn adc_should_detect_signed_overflow(){
    //max a three bit signed int can represent is 3 thus 3 + 1 should trigger an overflow
-   let a: BitField<3> = 0x3_u32.into();
-   let b: BitField<3> = 0x1_u32.into();
+   let a: BitField<32> = 0x7FFFFFFF_u32.into();
+   let b: BitField<32> = 0x0_u32.into();
 
-   let (sum,_,overflow) = add_with_carry(a, b, 0);
-   assert_eq!(sum, 4);
+   let (sum,carry,overflow) = add_with_carry(a, b, 1);
+   assert_eq!(sum, a.0 + 1);
+   assert_eq!(carry,false);
    assert_eq!(overflow, true);
 }
 

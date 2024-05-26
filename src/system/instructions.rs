@@ -152,7 +152,14 @@ pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-
    dbg_ln!("Ssum = {} + {} + {} = {}",signed_bitfield::<L>(a),signed_bitfield::<L>(b),carry,signed_sum);
    let carry_out = result as u64 != u_sum;
    dbg_ln!("C = {:x} != {:x} = {}",u_sum & 0xFFFFFFFF,u_sum,carry_out);
-   let overflow = signed_bitfield::<L>(BitField::<L>(result as u32)) != signed_sum.0;
+   let overflow = match (signed_bitfield::<L>(a)).checked_add(signed_bitfield::<L>(b)){
+    Some(t) => match t.checked_add(1){
+        Some(_) => false, 
+        None => true,
+    },
+    None => true,
+};
+   //let overflow = signed_bitfield::<L>(BitField::<L>(result as u32)) != signed_sum.0;
    dbg_ln!("R= {}",result & 0xFFFFFFFF);
    return ((result & 0xFFFFFFFF) as u32,carry_out,overflow);
 }

@@ -159,10 +159,6 @@ pub fn signed_bitfield<const L: u32>(a: BitField<L>)->i32{
       //dbg_ln!("ret={}",a.0);
       a.0 as i32
    }else{
-      let masked: Wrapping<u32> = Wrapping((a.0 & !(1<<(L-1))));
-      let sign_off: Wrapping<u32> = Wrapping(1 << (L-1));
-      //println!("ub {} - ub {} = {}",masked,sign_off,Wrapping(masked-sign_off));
-      //println!();
       (Wrapping((a.0 & !(1<<(L-1))) as i32)  - Wrapping(1<<(L-1))).0
    }
 }

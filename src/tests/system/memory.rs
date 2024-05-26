@@ -1,4 +1,4 @@
-use crate::system::{System,load_memory,write_memory, BlockAllocator};
+use crate::system::{System,load_memory,write_memory, BlockAllocator, MemPermission};
 
 #[test]
 pub fn should_err_on_unaligned_read(){
@@ -125,3 +125,42 @@ pub fn should_allocate_sections(){
    assert_eq!(c_res,c_data);
 }
 
+#[test]
+pub fn memory_permissions_test(){
+   let sys = System::create(10);
+   let (perm,xn) =  sys.default_permissions(0x00000000);
+   assert_eq!(xn,false);
+   let (perm,xn) =  sys.default_permissions(0x1FFFFFFF);
+   assert_eq!(xn,false);
+   let (perm,xn) =  sys.default_permissions(0x20000000);
+   assert_eq!(xn,false);
+   let (perm,xn) =  sys.default_permissions(0x3FFFFFFF);
+   assert_eq!(xn,false);
+
+   let (perm,xn) =  sys.default_permissions(0x60000000);
+   assert_eq!(xn,false);
+   let (perm,xn) =  sys.default_permissions(0x7FFFFFFF);
+   assert_eq!(xn,false);
+
+   let (perm,xn) =  sys.default_permissions(0x80000000);
+   assert_eq!(xn,false);
+   let (perm,xn) =  sys.default_permissions(0x9FFFFFFF);
+   assert_eq!(xn,false);
+
+   let (perm,xn) =  sys.default_permissions(0x40000000);
+   assert_eq!(xn,true);
+   let (perm,xn) =  sys.default_permissions(0x5FFFFFFF);
+   assert_eq!(xn,true);
+   let (perm,xn) =  sys.default_permissions(0xA0000000);
+   assert_eq!(xn,true);
+   let (perm,xn) =  sys.default_permissions(0xBFFFFFFF);
+   assert_eq!(xn,true);
+   let (perm,xn) =  sys.default_permissions(0xC0000000);
+   assert_eq!(xn,true);
+   let (perm,xn) =  sys.default_permissions(0xDFFFFFFF);
+   assert_eq!(xn,true);
+   let (perm,xn) =  sys.default_permissions(0xE0000000);
+   assert_eq!(xn,true);
+   let (perm,xn) =  sys.default_permissions(0xFFFFFFFF);
+   assert_eq!(xn,true);
+}

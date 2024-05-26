@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::num::Wrapping;
 
 use crate::asm::interpreter::print_instruction;
 use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
@@ -1423,6 +1424,7 @@ impl System{
                      self.registers.generic[src.0 as usize],
                      self.registers.generic[arg.0 as usize]
                   );
+                  println!("sub output {:?}",flags);
 
                   self.registers.generic[dest.0 as usize] = sum;
                   self.update_apsr(&flags);
@@ -1924,10 +1926,11 @@ impl System{
 
                   let base_v = self.registers.generic[base.0 as usize];
                   let offset_v = self.registers.generic[offset.0 as usize];
-                  let addr = base_v + offset_v;
+                  let addr = Wrapping(base_v) + Wrapping(offset_v);
                   let v = (self.registers.generic[src.0 as usize] & 0xFF) as u8;
 
-                  write_memory::<1>(self,addr,[v])?;
+                  dbg_ln!("STRB: *{:#x} := {}",addr.0,v);
+                  write_memory::<1>(self,addr.0,[v])?;
 
                   return Ok(instr_size.in_bytes() as i32);
                },
