@@ -17,7 +17,7 @@
    .4byte 0 //r12
    .4byte 0 //LR
    .4byte 0 //PC
-   .4byte 0 //XPSR
+   .4byte 0x01000000 //XPSR
 .endm
 
 _vector_table:
@@ -134,6 +134,8 @@ _svc_handler:
                POP {r7}  //pc
                ADD r1,#4
                STM r1!, {r0,r2-r7}
+               .set DEF_XPSR, 0x01000000
+               LDR r0,=DEF_XPSR
                STR r0, [r1,#0] //xpsr
                POP {r4-r7}
                BX LR

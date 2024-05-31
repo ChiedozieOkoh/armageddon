@@ -210,12 +210,16 @@ impl BlockAllocator{
    }
 }
 
+pub fn default_xpsr()->[u8;4]{
+   into_arm_bytes(0x01000000)
+}
+
 impl System{
    pub fn create(capacity: usize)->Self{
       let registers = Registers::create();
       return System{
          registers,
-         xpsr: [0;4],
+         xpsr: default_xpsr(),
          control_register: [0;4],
          event_register: false,
          active_exceptions: [ExceptionStatus::Inactive; 48],
@@ -238,7 +242,7 @@ impl System{
       let registers = Registers::create();
       return System{
          registers,
-         xpsr: [0;4],
+         xpsr: default_xpsr(),
          control_register: [0;4],
          event_register: false,
          active_exceptions: [ExceptionStatus::Inactive; 48],
@@ -279,7 +283,7 @@ impl System{
 
       return System{
          registers: Registers::create(),
-         xpsr: [0;4],
+         xpsr: default_xpsr(),
          control_register: [0;4],
          event_register: false,
          active_exceptions: [ExceptionStatus::Inactive; 48],
@@ -921,6 +925,10 @@ impl System{
    }
 
    pub fn step(&mut self)->Result<i32, ArmException>{
+      if !self.epsr_t_bit(){
+         return Err(ArmException::HardFault("EPSR.T must always be set".into()));
+      }
+
       dbg_ln!("ctrl before step: [{}{}]",self.sp_select_bit()as u32,self.get_npriv() as u32);
       if self.locked_up{
          return Ok(0);

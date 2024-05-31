@@ -1933,7 +1933,7 @@ pub fn hardware_linear_search(){
    let states = parse_gdb_output(&output);
    print_states(states);
    std::fs::remove_file("dump_proc_state_linear_search").unwrap();
-   panic!("want to see logs");
+   //panic!("want to see logs");
 }
 
 #[test] #[ignore]
