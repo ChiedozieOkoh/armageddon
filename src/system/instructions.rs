@@ -90,11 +90,11 @@ pub fn cond_passed(apsr: Apsr, b_cond: &Opcode)->bool{
        Opcode::_16Bit(B16::B_IF_OVERFLOW) => overflow_flag(apsr),
        Opcode::_16Bit(B16::B_IF_NO_OVERFLOW) => !overflow_flag(apsr),
        Opcode::_16Bit(B16::B_UNSIGNED_HIGHER) => carry_flag(apsr) && !zero_flag(apsr),
-       Opcode::_16Bit(B16::B_UNSIGNED_LOWER_OR_SAME) => !carry_flag(apsr) && zero_flag(apsr),
+       Opcode::_16Bit(B16::B_UNSIGNED_LOWER_OR_SAME) => !carry_flag(apsr) || zero_flag(apsr),
        Opcode::_16Bit(B16::B_GTE) => negative_flag(apsr) == overflow_flag(apsr),
        Opcode::_16Bit(B16::B_LT) => negative_flag(apsr) != overflow_flag(apsr),
        Opcode::_16Bit(B16::B_GT) => !zero_flag(apsr) && (negative_flag(apsr) == overflow_flag(apsr)),
-       Opcode::_16Bit(B16::B_LTE) => zero_flag(apsr) && (negative_flag(apsr) != overflow_flag(apsr)),
+       Opcode::_16Bit(B16::B_LTE) => zero_flag(apsr) || (negative_flag(apsr) != overflow_flag(apsr)),
        Opcode::_16Bit(B16::B_ALWAYS) => true,
       _ => unreachable!()
    }

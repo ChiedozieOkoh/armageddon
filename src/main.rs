@@ -9,6 +9,7 @@ mod ui;
 #[cfg(test)]
 mod tests;
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use elf::decoder::{ElfError, SymbolDefinition};
 use iced::Application;
@@ -24,6 +25,8 @@ struct Args{
    pub sp_reset_val: Option<u32>,
    pub vtor_override: Option<u32>,
    pub entry_point_override: Option<u32>,
+   pub opt_load_section: Option<(String,u32)>,
+   pub opt_jump: Option<u32>,
    pub manual_boot: bool
 }
 
@@ -50,7 +53,11 @@ const HELP_MSG: &'static str =  concat!(
    "                        when this value is set via the CLI the entry_point of the ELF\n",
    "                        will be assumed to point to the reset routine handler\n",
    "\n",
-   "--entrypoint=<HEX>     explicitly set the entry point \n"
+   "--entrypoint=<HEX>      explicitly set the entry point \n",
+   "\n",
+   "--load-mem=<FILE:HEX>   specify a raw binary file to be mapped into memory at a specific hex address\n",
+   "\n",
+   "--jump-to=<HEX>  jump to an address after boot\n"
 );
 
 fn gui_diasm(){
@@ -64,11 +71,12 @@ fn gui_diasm(){
    }
 
    let cli_arg = parse_args(args).unwrap(); 
-   let maybe_instructions  = load_instruction_opcodes(&cli_arg.elf);
+   let maybe_instructions  = load_instruction_opcodes(&cli_arg.elf,cli_arg.opt_load_section.clone());
    exit_on_err(&maybe_instructions);
 
    let (disasm, mut entry_point, symbol_map, mut sys) = maybe_instructions.unwrap();
    println!("sys memory image: 0 -> {} pages ",sys.alloc.pages());
+   println!("{} symbols defined",symbol_map.len());
 
    if cli_arg.entry_point_override.is_some(){
       println!("overriding entry point");
@@ -98,8 +106,16 @@ fn gui_diasm(){
       println!("system boot type: MANUAL");
    }
 
-   //println!("spoofing PI RESETS DONE register");
-   //sys.alloc.put(0x4000c008, [0xFF,0xFF,0xFF,1]);
+   if let Some(addr) = cli_arg.opt_jump{
+      sys.set_pc((addr & !1) as usize).unwrap();
+   }
+
+   /*
+   println!("spoofing PI RESETS DONE register");
+   sys.alloc.put(0x4000c008, [0xFF,0xFF,0xFF,1]);
+   println!("spoofing PI ADC.CW register");
+   sys.alloc.put(0x4004c000, [1,1,0,0]);
+   */
 
    sys.trace_enabled = true;
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);
@@ -131,6 +147,21 @@ fn get_optional_hex(args: &Vec<String>,name: &str)->Result<Option<u32>,ParseErr>
    Ok(val)
 }
 
+fn get_first_parameter_arg<'a>(args: &'a Vec<String>,name: &str)->Result<Option<&'a str>,ParseErr>{
+   let maybe_val = args.iter().position(|a| a.starts_with(name));
+   match maybe_val{
+      Some(i) => {
+         match args[i].strip_prefix(name){
+            Some(input) => {
+               return Ok(Some(input));
+            },
+            None => {return Err(ParseErr(String::from(format!("missing value for {}",name))))}
+        }
+      },
+      None => {Ok(None)},
+   }
+}
+
 fn parse_args(args: Vec<String>)->Result<Args,ParseErr>{
    if args.len()  < 2{
       dbg_ln!("you must provide one elf file");
@@ -157,12 +188,32 @@ fn parse_args(args: Vec<String>)->Result<Args,ParseErr>{
    let manual_boot = args.contains(&String::from("--manual-boot"));
    let maybe_vtor = get_optional_hex(&args, "--vtor=")?;
    let maybe_entry_point = get_optional_hex(&args, "--entrypoint=")?;
+   let maybe_jump = get_optional_hex(&args, "--jump-to=")?;
+   let maybe_load_opt = get_first_parameter_arg(&args, "--load-mem=")?;
+   let load_sec_arg = match maybe_load_opt{
+      Some(pair) => {
+         match pair.split_once(':'){
+            Some((fpath,addr_str)) => {
+               match parse_hex(addr_str){
+                  Some(c) => {
+                     Some((fpath.to_owned(),c))
+                  },
+                  None => return Err(ParseErr(String::from(format!("{} is an invalid hex string",addr_str)))),
+               }
+            },
+            None => None,
+         }
+      },
+      None => None,
+   };
 
    Ok(Args { 
       elf: maybe_file,
       sp_reset_val: reset_val,
       vtor_override: maybe_vtor,
       entry_point_override: maybe_entry_point,
+      opt_load_section: load_sec_arg,
+      opt_jump: maybe_jump,
       manual_boot
    })
 }
@@ -177,7 +228,7 @@ fn cli_disasm(){
    }
 
    let cli_arg = parse_args(args).unwrap(); 
-   let maybe_instructions  = load_instruction_opcodes(&cli_arg.elf);
+   let maybe_instructions  = load_instruction_opcodes(&cli_arg.elf, None);
    exit_on_err(&maybe_instructions);
 
    //let (instructions, entry_point, symbol_map) = maybe_instructions.unwrap();
@@ -217,7 +268,7 @@ fn asm_file_to_elf(path: &Path)->Result<PathBuf,std::io::Error>{
 }
 */
 
-fn load_instruction_opcodes(file: &Path)->Result<(Vec<String>, usize, Vec<SymbolDefinition>, System),ElfError>{
+fn load_instruction_opcodes(file: &Path, extra_sec: Option<(String,u32)>)->Result<(Vec<String>, usize, Vec<SymbolDefinition>, System),ElfError>{
    use crate::elf::decoder::{
       SectionHeader,
       get_header,
@@ -248,13 +299,21 @@ fn load_instruction_opcodes(file: &Path)->Result<(Vec<String>, usize, Vec<Symbol
 
    let loadable = get_loadable_sections(&mut reader, &elf_header,&section_headers)?;
 
-   let section_data = load_sections(&mut reader, &elf_header, &section_headers, loadable)?;
+   let mut section_data = load_sections(&mut reader, &elf_header, &section_headers, loadable)?;
 
    let t = section_data.iter().position(|(name,_,_)|name.eq(".text")).expect("ELF file did not specify a .text section ???");
 
    let (_,text_offset,text_data) = &section_data[t];
    let disasm = disasm_text(text_data, *text_offset as usize, &symbols);
    let entry_point = get_entry_point_offset(&elf_header);
+
+   if let Some((fpath,addr)) = extra_sec{
+      let mut fhandle = std::fs::File::open(&fpath)?;
+      let mut sdata: Vec<u8> = Vec::new();
+      fhandle.read_to_end(&mut sdata)?;
+      println!("adding user section: {} [{:x} -> {:x}]",&fpath,addr,addr + sdata.len() as u32);
+      section_data.push((fpath,addr,sdata));
+   }
 
    let mut sys = System::with_sections(section_data);
    sys.set_pc(entry_point & (!1)).unwrap();

@@ -396,13 +396,13 @@ fn highlight_or_default<'a>(target: &String,line: &str, search_result: &Vec<Text
 fn highlight_region<'a>(line: &str,start: usize, len: usize, _focus: bool, normal_font: Option<(iced::Color,iced::Font)>)->Row<'a,Event,iced::Renderer>{
    let offset = start;
    let hl_len = len;
-   println!("highlighting within '{}'",line);
-   println!("highlight range {} -> {}",offset,offset+hl_len);
+   dbg_ln!("highlighting within '{}'",line);
+   dbg_ln!("highlight range {} -> {}",offset,offset+hl_len);
    let hl_region = line.get(offset .. offset + hl_len).unwrap();
-   println!("will highlight '{}'",hl_region);
+   dbg_ln!("will highlight '{}'",hl_region);
    let before = line.get(.. offset);
    let after =  line.get(offset + hl_len ..);
-   println!("before substr {:?}, after substr {:?}",before,after);
+   dbg_ln!("before substr {:?}, after substr {:?}",before,after);
 
    let mut text_box = Row::new();
    let highlight_clr = if _focus{
@@ -505,7 +505,7 @@ fn pane_render<'a>(
                      .is_nth_term_focused(sr_idx);
 
                   let len = app.searchbar.as_ref().unwrap().target.len();
-                  println!("bkpt end: {}",bkpt_end);
+                  dbg_ln!("bkpt end: {}",bkpt_end);
                   if search_results[sr_idx].line_offset < bkpt_end{
                      println!("calc = {} result len = {}",bkpt_end - search_results[sr_idx].line_offset,len);
                      let bkpt_hi_end = std::cmp::min(
