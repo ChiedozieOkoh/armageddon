@@ -3,9 +3,9 @@
 
 Clone the repository and run `cargo b --release`\
 The release binary produced will be in  `<repository root>/target/release/armageddon`\ 
-
 NOTE: the program depends the the iced ui library which is fairly new, I have only tested it 
 on linux using X11 so I am not sure if its compatible with other operating systems. 
+
 # Launching From The Command Line
 You need to provide to simulator with a path to an ELF file.\
 You can run the simulator with  `armageddon <path_to_elf>`
