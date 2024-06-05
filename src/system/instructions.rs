@@ -165,17 +165,19 @@ pub fn add_with_carry<const L: u32>(a: BitField<L>, b: BitField<L>, carry: u32)-
 }
 
 pub fn asr(val: u32, ammount: u32, overflow: bool)->(u32,ConditionFlags){
+   dbg_ln!("shift ammount {}",ammount);
    let signed = val & 0x80000000 > 0;
    let signed_bits = u32::MAX << (32 - ammount);
+   let shifted = if ammount == 32{ 0 }else{ val >> ammount };
    let result = if signed{
-      (val >> ammount) | signed_bits
+      shifted | signed_bits
    }else{
-      val >> ammount
+      shifted
    };
 
    let carry = (val & (1 << (ammount - 1))) > 0;
    let flags = ConditionFlags{
-      negative: signed,
+      negative: (result & 0x80000000) > 0,
       zero: result == 0,
       carry,
       overflow,

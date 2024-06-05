@@ -1451,7 +1451,7 @@ fn centre_disassembler(dis_windows: &Window, disasm: &String,ir: u32)->Option<ic
    let y_ratio = (ir_ln as f32) / total_lines as f32;
    dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
    if let Some(id) = dis_windows.get_focused_pane(){
-      println!("snapping to {:?}",id);
+      dbg_ln!("snapping to {:?}",id);
       let cmd = iced::widget::scrollable::snap_to(
          id.clone(),
          scrollable::RelativeOffset { x: 0.0, y: y_ratio }

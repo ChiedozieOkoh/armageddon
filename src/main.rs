@@ -110,12 +110,14 @@ fn gui_diasm(){
       sys.set_pc((addr & !1) as usize).unwrap();
    }
 
+   
    /*
    println!("spoofing PI RESETS DONE register");
    sys.alloc.put(0x4000c008, [0xFF,0xFF,0xFF,1]);
    println!("spoofing PI ADC.CW register");
    sys.alloc.put(0x4004c000, [1,1,0,0]);
    */
+   
 
    sys.trace_enabled = true;
    //let disasm = disasm_text(&instructions, entry_point, &symbol_map);

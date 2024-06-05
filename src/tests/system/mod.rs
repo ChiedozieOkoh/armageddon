@@ -73,44 +73,24 @@ fn parse_gdb_output(output: &str)->Vec<u32>{
       if state.contains("<<FINISHED_PROC_LOG>>"){
          continue;
       }
-
       let r0 = get_value_of_register(state, "$r0 = ").unwrap();
-      //println!("r0 -> {:?}", r0);
       let r1 = get_value_of_register(state, "$r1 = ").unwrap();
-      //println!("r1 -> {:?}", r1);
       let r2 = get_value_of_register(state, "$r2 = ").unwrap();
-      //println!("r2 -> {:?}", r2);
       let r3 = get_value_of_register(state, "$r3 = ").unwrap();
-
       let r4 = get_value_of_register(state, "$r4 = ").unwrap();
-
       let r5 = get_value_of_register(state, "$r5 = ").unwrap();
-
       let r6 = get_value_of_register(state, "$r6 = ").unwrap();
-
       let r7 = get_value_of_register(state, "$r7 = ").unwrap();
-
       let r8 = get_value_of_register(state, "$r8 = ").unwrap();
-
       let r9 = get_value_of_register(state, "$r9 = ").unwrap();
-
       let r10 = get_value_of_register(state, "$r10 = ").unwrap();
-
       let r11 = get_value_of_register(state, "$r11 = ").unwrap();
-
       let r12 = get_value_of_register(state, "$r12 = ").unwrap();
-      //println!("r3 -> {:?}", r3);
       let msp = get_reg_val_from_hex(state, "$msp = ").unwrap();
-
       let psp = get_reg_val_from_hex(state, "$psp = ").unwrap();
-      //println!("sp -> {:?}", sp);
       let lr = get_value_of_register(state, "$lr = ").unwrap();
-      //println!("lr -> {:?}", lr);
       let pc = get_reg_val_from_hex(state, "$pc = ").unwrap();
-      //println!("pc -> {:?}", pc);
       let xpsr = get_value_of_register(state, "$xPSR = ").unwrap();
-      //println!("xPSR -> {:?}", xpsr);
-
       states.push(r0);
       states.push(r1);
       states.push(r2);

@@ -521,9 +521,9 @@ impl System{
 
    fn offset_read_pc(pc: u32, offset: i32)->Result<u32, ArmException>{
       let new_addr = if offset.is_negative(){
-         pc - (offset.wrapping_abs() as u32)
+         (Wrapping(pc) - Wrapping(offset.wrapping_abs() as u32)).0
       }else{
-         pc + (offset as u32)
+         (Wrapping(pc) + Wrapping(offset as u32)).0
       };
 
       if !is_aligned(new_addr , 2){
@@ -1577,10 +1577,11 @@ impl System{
                      a,b,c
                   );
 
-                  let addr = self.registers.generic[base.0 as usize] + self.registers.generic[offset.0 as usize];
-                  let value: [u8;4] = load_memory::<4>(&self, addr)?;
+                  let addr = Wrapping(self.registers.generic[base.0 as usize]) 
+                     + Wrapping(self.registers.generic[offset.0 as usize]);
+                  let value: [u8;4] = load_memory::<4>(&self, addr.0)?;
                   self.registers.generic[dest.0 as usize] = from_arm_bytes(value);
-                  if let Some(MemoryMappedRegister::syst_csr) = MemoryMappedRegister::from_address(addr){
+                  if let Some(MemoryMappedRegister::syst_csr) = MemoryMappedRegister::from_address(addr.0){
                      self.scs.clear_countflag();
                   }
 
@@ -1677,8 +1678,8 @@ impl System{
                   );
 
                   let off = self.registers.generic[offset.0 as usize];
-                  let base_addr = self.registers.generic[base.0 as usize] + off;
-                  let v = load_memory::<1>(&self,base_addr)?;
+                  let base_addr = Wrapping(self.registers.generic[base.0 as usize]) + Wrapping(off);
+                  let v = load_memory::<1>(&self,base_addr.0)?;
                   let extended = sign_extend_u32::<8>(v[0] as u32);
                   self.registers.generic[dest.0 as usize] = extended;
 
@@ -1900,10 +1901,10 @@ impl System{
                   );
                   let base_v = self.registers.generic[base.0 as usize];
                   let offset_v = self.registers.generic[offset.0 as usize];
-                  let addr = base_v + offset_v;
+                  let addr = Wrapping(base_v) + Wrapping(offset_v);
                   let v = self.registers.generic[src.0 as usize];
 
-                  write_memory::<4>(self,addr,into_arm_bytes(v))?;
+                  write_memory::<4>(self,addr.0,into_arm_bytes(v))?;
 
                   return Ok(instr_size.in_bytes() as i32);
                },
