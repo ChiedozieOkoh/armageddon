@@ -1,4 +1,6 @@
 # Building The Project
+[I recommend using rustup to install cargo](https://doc.rust-lang.org/book/ch01-01-installation.html)
+
 Clone the repository and run `cargo b --release`\
 The release binary produced will be in  `<repository root>/target/release/armageddon`
 
@@ -49,6 +51,9 @@ Use the `--manual-boot` flag to enable manual boot mode.
 In manual boot mode the simulator will simply initialise the `PC` register to point to the `entrypoint` of the ELF file.\ 
 You can override the `entrypoint` value being used with the `--entrypoint=<HEX>` flag.\ 
 Note manual boot mode will leave the `MSP` and the `PSP` registers uninitialised.\
+You can specify the reset value of the `MSP` by using the `--sp-reset-val=<HEX>` flag  \
+If you are running the simulator in manual-boot mode you should press the `Reset` button on the GUI to initialise
+the `SP`. 
 
 ## Reset behaviour
 For a reset to function properly you should have a reset handler which is pointed to by the vector table. \
