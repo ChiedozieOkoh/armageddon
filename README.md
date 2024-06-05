@@ -1,8 +1,9 @@
 # Building The Project
 [I recommend using rustup to install cargo](https://doc.rust-lang.org/book/ch01-01-installation.html)
 
-Clone the repository and run `cargo b --release`\
-The release binary produced will be in  `<repository root>/target/release/armageddon`\ 
+Clone the repository and run `cargo b --release`\ 
+The release binary produced will be in  `<repository root>/target/release/armageddon` \ 
+
 NOTE: the program depends the the iced ui library which is fairly new, I have only tested it 
 on linux using X11 so I am not sure if its compatible with other operating systems. 
 
