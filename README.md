@@ -2,7 +2,7 @@
 Armageddon is a simple graphical ARMv6-M instruction set simulator
 
 ## Screenshot
-[ui screenshot](ui_screenshot.png)
+![ui screenshot](ui_screenshot.png)
 
 # Building The Project
 [I recommend using rustup to install cargo](https://doc.rust-lang.org/book/ch01-01-installation.html)
