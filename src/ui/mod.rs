@@ -971,6 +971,9 @@ impl Application for App{
                                  sys.reset();
                                  halt = Some(HaltType::usercmd);
                               },
+
+                              Event::Dbg(Debug::Continue)=>{/*ignore this signal*/ },
+
                               Event::Dbg(Debug::CreateBreakpoint(addr))=>{
                                  sys.add_breakpoint(addr);
                               },
@@ -1308,10 +1311,25 @@ impl Application for App{
          },
 
          Event::Dbg(Debug::Step) => {
-            let mut sys = self.sync_sys.try_lock().unwrap();
-            Simulator::step_or_signal_halt(&mut sys).unwrap();
-            self.trace_record = sys.trace.clone();
-            self.sys_view = sys.deref().into();
+            use std::sync::TryLockError;
+            match self.sync_sys.try_lock(){
+               Ok(mut sys)=>{
+                  Simulator::step_or_signal_halt(&mut sys).unwrap();
+                  self.trace_record = sys.trace.clone();
+                  self.sys_view = sys.deref().into();
+               },
+               Err(e)=>{
+                  match e{
+                     TryLockError::Poisoned(_)=>{
+                        panic!("unexpected error occured in DEBUG thread, this is definately a problem! ");
+                     },
+                     TryLockError::WouldBlock=>{
+                        println!("cannot use manual step whilst DEBUG thread this running");
+                     }
+                  }
+               }
+            }
+
          },
 
          Event::Dbg(Debug::Connect(sender)) => {
