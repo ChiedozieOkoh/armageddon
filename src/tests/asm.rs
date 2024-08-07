@@ -1775,3 +1775,23 @@ fn should_recognise_instruction_size()->Result<(),std::io::Error>{
    assert_eq!(instruction_size(instr_16), InstructionSize::B16);
    Ok(())
 }
+
+#[test]
+fn u32_string_functions(){
+   use crate::asm::decode_operands::{u32_to_hex,u32_to_b10};
+   let mut buffer = String::new();
+   u32_to_hex(&mut buffer,0xFA923);
+   assert_eq!(buffer,String::from("0x000FA923"));
+
+   buffer.clear();
+   u32_to_hex(&mut buffer, u32::MAX);
+   assert_eq!(buffer,"0xFFFFFFFF");
+
+   buffer.clear();
+   u32_to_b10(&mut buffer,19);
+   assert_eq!(buffer,String::from("19"));
+
+   buffer.clear();
+   u32_to_b10(&mut buffer, u32::MAX);
+   assert_eq!(buffer,u32::MAX.to_string());
+}

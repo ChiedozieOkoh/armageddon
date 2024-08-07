@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::num::Wrapping;
 
-use crate::asm::interpreter::print_instruction;
+use crate::asm::interpreter::serialise_instruction;
 use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
 use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32, from_arm_bytes_16b, BitField, sign_extend};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
@@ -13,9 +13,12 @@ use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,
 use self::instructions::{cond_passed, shift_left, shift_right};
 use self::registers::{Registers, Apsr, SpecialRegister, get_overflow_bit};
 
+use crate::system::trace::Trace;
+
 pub mod registers;
 pub mod instructions;
 pub mod simulator;
+pub mod trace;
 
 pub struct System{
    pub registers: Registers,
@@ -29,7 +32,8 @@ pub struct System{
    //pub memory: Vec<u8>,
    pub breakpoints: Vec<usize>,
    pub trace_enabled: bool,
-   pub trace: String,
+   //pub trace: String,
+   pub trace: Trace,
    pub alloc: BlockAllocator,
    pub reset_cfg: Option<ResetCfg>,
    pub vtor_override: Option<u32>,
@@ -229,7 +233,8 @@ impl System{
          //memory: vec![0;capacity],
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new(),
+         //trace: String::new(),
+         trace: Trace::create(200),
          alloc: BlockAllocator::create(),
          reset_cfg: None,
          vtor_override: None,
@@ -252,7 +257,8 @@ impl System{
          //memory: Vec::new(),
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new(),
+         //trace: String::new(),
+         trace: Trace::create(200),
          alloc: BlockAllocator::fill(text),
          reset_cfg: None,
          vtor_override: None,
@@ -293,7 +299,8 @@ impl System{
          //memory: Vec::new(),
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new(),
+         //trace: String::new(),
+         trace: Trace::create(200),
          alloc: BlockAllocator::init(memory),
          reset_cfg: None,
          vtor_override: None,
@@ -953,17 +960,36 @@ impl System{
                if matches!(code,Opcode::_16Bit(B16::B_ALWAYS)){
                   let offset = unpack_operands!(operands,Operands::B_ALWAYS,off);
                   if offset != 0{
-                     self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                     serialise_instruction(
+                        self.trace.get(),
+                        self.registers.pc as u32,
+                        &code,
+                        &operands
+                     );
+                     //self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
                      self.trace.push('\n');
+                     self.trace.trim();
                   }else{
                      if !self.trace.ends_with(COMPRESS_BAL){
-                        self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                        serialise_instruction(
+                           self.trace.get(),
+                           self.registers.pc as u32,
+                           &code,
+                           &operands
+                        );
                         self.trace.push_str(COMPRESS_BAL);
                      }
                   }
                }else{
-                  self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                  serialise_instruction(
+                     &mut self.trace.get(),
+                     self.registers.pc as u32,
+                     &code,
+                     &operands
+                  );
+                  //self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
                   self.trace.push('\n');
+                  self.trace.trim();
                }
             }
             match code {
@@ -2252,8 +2278,15 @@ impl System{
             let instr_32b = Opcode::from(word);
             let operands = get_operands_32b(&instr_32b, word);
             if self.trace_enabled{
-               self.trace.push_str(&print_instruction(self.registers.pc as u32 , &instr_32b, &operands));
+                  serialise_instruction(
+                     &mut self.trace.get(),
+                     self.registers.pc as u32,
+                     &instr_32b,
+                     &operands
+                  );
+               //self.trace.push_str(&print_instruction(self.registers.pc as u32 , &instr_32b, &operands));
                self.trace.push('\n');
+               self.trace.trim();
             }
             match instr_32b{
                Opcode::_32Bit(B32::MSR) => {

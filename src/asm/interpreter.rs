@@ -1,6 +1,6 @@
 use crate::{asm::decode::{Opcode,B16}, elf::decoder::{LiteralPools, SymbolDefinition, SymbolType}, binutils::{from_arm_bytes_16b, from_arm_bytes}, conditional_branches};
 use crate::dbg_ln;
-use super::{decode_operands::{get_operands, pretty_print, get_operands_32b, Operands}, decode::{instruction_size, InstructionSize, B32}};
+use super::{decode_operands::{get_operands, pretty_print, get_operands_32b, Operands, u32_to_hex, serialise_operand}, decode::{instruction_size, InstructionSize, B32, serialise_opcode}};
 
 pub const INDENT: &str = "   ";
 
@@ -96,6 +96,24 @@ impl<'a> SymbolTable<'a>{
    }
 }
 
+pub fn serialise_instruction(bfr: &mut String, addr: u32, code:&Opcode, operand: &Option<Operands>){
+   bfr.push_str(INDENT);
+   u32_to_hex(bfr, addr);
+   bfr.push(':');
+   bfr.push_str(INDENT);
+   match operand{
+      Some(args)=>{
+         if *code != Opcode::_16Bit(B16::CPS){
+            serialise_opcode(bfr, code);
+            bfr.push(' ');
+         }
+         serialise_operand(bfr, &args, addr);
+      },
+      None=>{
+         serialise_opcode(bfr, code);
+      }
+   }
+}
 pub fn print_instruction(addr: u32,code: &Opcode, operands: &Option<Operands>)->String{
    let instruction = match operands{
       Some(args) => {
@@ -109,9 +127,6 @@ pub fn print_instruction(addr: u32,code: &Opcode, operands: &Option<Operands>)->
    };
 
    instruction
-}
-
-fn branch_disassemble(){
 }
 
 fn offset_addr(addr: u32, offset: i32)->u32{
