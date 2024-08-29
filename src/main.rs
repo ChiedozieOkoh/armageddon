@@ -111,11 +111,14 @@ fn gui_diasm(){
    }
 
    
+   
    /*
    println!("spoofing PI RESETS DONE register");
    sys.alloc.put(0x4000c008, [0xFF,0xFF,0xFF,1]);
    println!("spoofing PI ADC.CW register");
    sys.alloc.put(0x4004c000, [1,1,0,0]);
+   println!("spoofing XOSC ENABLED");
+   sys.alloc.put(0x40024000,binutils::u32_to_arm_bytes((0xFAB << 12)));
    */
    
 

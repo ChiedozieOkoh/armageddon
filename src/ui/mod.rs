@@ -19,6 +19,8 @@ const TEXT_SIZE: u16 = 11;
 pub mod searchbar;
 pub mod window;
 
+use self::{searchbar::SearchBar, window::{Window, ExplorerMap, line_buffer}}; 
+
 pub struct App{
    _state: pane_grid::State<PaneType>,
    n_panes: usize,
@@ -28,6 +30,7 @@ pub struct App{
    explorer_map: ExplorerMap,
    entry_point: usize,
    pub disasm: String,
+   total_disasm_lines: usize,
    register_hex_display: [bool;13],
    searchbar: Option<SearchBar>,
    symbols: Vec<SymbolDefinition>,
@@ -443,6 +446,9 @@ fn highlight_region<'a>(line: &str,start: usize, len: usize, _focus: bool, norma
    text_box.padding(0).height(iced::Length::Shrink)
 }
 
+const BUFFERED_LINE_LIMIT: usize = 400;
+const VIEWPORT_LINES: usize = 50;
+
 fn pane_render<'a>(
    app: &App,
    id: &pane_grid::Pane,
@@ -472,8 +478,16 @@ fn pane_render<'a>(
          let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![];
          text_box = text_box.spacing(0).padding(0).height(iced::Length::Shrink);
 
-         for line in app.disasm.lines(){
+         let rendering_text = if app.total_disasm_lines > BUFFERED_LINE_LIMIT{
+            let ref_id  = app.diasm_windows.id_of(id).unwrap().clone();
+            let starting_line = app.diasm_windows.scroll_position(&ref_id).unwrap().clone();
+            line_buffer(&app.disasm,starting_line, starting_line + VIEWPORT_LINES)
+         }else{
+            &app.disasm
+         };
+         for line in rendering_text.lines(){
             if !line.trim().is_empty(){
+               //println!("cur line: {}",line);
                let offset = line.split(":").next().unwrap();
                let addr = u32::from_str_radix(
                   offset.trim().trim_start_matches("0x").trim(),
@@ -496,6 +510,7 @@ fn pane_render<'a>(
                   iced::color!(0,0,0)
                };
 
+               //println!("c line : {}",line);
                let bkpt_end = line.find(':').unwrap();
                let (bkpt_area,rest_of_line) = line.split_at(bkpt_end);
                let current = current_search_result(&search_results,sr_idx);
@@ -597,8 +612,16 @@ fn pane_render<'a>(
             }
             line_number += 1;
          }
-         //let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill).style(iced::color!(100,0,0));
-         container(scrollable(text_box.spacing(0)).id(app.diasm_windows.id_of(id).unwrap().clone()))
+         let ref_id  = app.diasm_windows.id_of(id).unwrap().clone();
+         let bar_id = ref_id.clone();
+         container(
+               scrollable(text_box.spacing(0))
+                  .id(ref_id)
+                  .on_scroll(move |vp| {
+                     let abs = vp.relative_offset();
+                     Event::Ui(Gui::ScrollEvent(bar_id.clone(),abs.x,abs.y))
+                  })
+            )
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
@@ -838,6 +861,11 @@ impl Application for App{
       let sync_sys_arc = Arc::new(Mutex::new(sys));
       let mut windows = Window::create();
       windows.add_pane(def.clone());
+      let total_disasm_lines = disassembly.lines().count();
+      if total_disasm_lines > BUFFERED_LINE_LIMIT{
+         let id = windows.id_of(&def).unwrap();
+         windows.record_line_offset(id.clone(),0);
+      }
       (Self{
          _state: state,
          focused_pane: def,
@@ -847,6 +875,7 @@ impl Application for App{
          explorer_map: ExplorerMap::create(),
          sync_sys: sync_sys_arc,
          disasm: disassembly,
+         total_disasm_lines,
          entry_point,
          symbols,
          register_hex_display: [false;13],
@@ -867,6 +896,7 @@ impl Application for App{
 
    fn subscription(&self) -> iced::Subscription<Self::Message> {
       use iced::keyboard::Event as KeyEvent;
+      use iced::mouse::Event as MouseEvent;
       let shortcuts = iced::subscription::events_with(|event, status|{
          match event{
             iced::Event::Keyboard(KeyEvent::KeyReleased { key_code, modifiers }) => match key_code{
@@ -899,6 +929,35 @@ impl Application for App{
                    }
                 },
                 _ => None,
+            },
+
+            iced::Event::Mouse(MouseEvent::CursorLeft) => {
+               Some(Event::Ui(Gui::MouseLeft))
+            },
+
+            iced::Event::Mouse(MouseEvent::CursorEntered) =>{
+               Some(Event::Ui(Gui::MouseEntered))
+            },
+
+            iced::Event::Mouse(MouseEvent::CursorMoved{position})=>{
+               Some(Event::Ui(Gui::MouseHover(position)))
+            },
+
+            iced::Event::Mouse(MouseEvent::WheelScrolled{delta}) => {
+               match delta{
+                  iced::mouse::ScrollDelta::Lines{x,y}=>{ 
+                     //println!("scrolled {} lines ",y);
+                     if y < 0.0 { return Some(Event::Ui(Gui::ScrollDown)); }
+                     if y > 0.0{ return Some(Event::Ui(Gui::ScrollUp)); }
+                     return None;
+                  },
+                  iced::mouse::ScrollDelta::Pixels{x,y}=>{
+                     //println!("scrolled {} pixels ",y);
+                     if y < 0.0 { return Some(Event::Ui(Gui::ScrollDown)); }
+                     if y > 0.0{ return Some(Event::Ui(Gui::ScrollUp)); }
+                     return None;
+                  }
+               }
             },
             _ => None
          }
@@ -1016,8 +1075,11 @@ impl Application for App{
                let (new_pane,_) = p;
                match kind{
                   PaneType::Disassembler => {
-                     let _  = self.diasm_windows.add_pane(new_pane.clone());
+                     let new_id  = self.diasm_windows.add_pane(new_pane.clone());
                      self.diasm_windows.focus_if_present(&new_pane);
+                     if self.total_disasm_lines > BUFFERED_LINE_LIMIT{
+                        self.diasm_windows.record_line_offset(new_id,0);
+                     }
                   },
                   PaneType::MemoryExplorer =>{
                      let _ = self.memview_windows.add_pane(new_pane.clone());
@@ -1239,6 +1301,84 @@ impl Application for App{
 
          Event::Ui(Gui::ToggleRegisterDisplay(i))=>{
             self.register_hex_display[i as usize] = !self.register_hex_display[i as usize];
+         },
+
+         //TODO revome cursor_position
+         Event::Ui(Gui::MouseHover(point))=>{
+            self.diasm_windows.cursor_position = Some(point);
+         },
+
+         Event::Ui(Gui::MouseEntered)=>{
+            //println!("mouse entered but we dont know where it is");
+            self.diasm_windows.cursor_position = None;
+         },
+
+         Event::Ui(Gui::MouseLeft)=>{
+            //println!("mouse left the ui so the position has been invalidated");
+            self.diasm_windows.cursor_position = None;
+         },
+
+         //TODO remove standard scrollbars 
+         Event::Ui(Gui::ScrollUp)=>{ 
+            //println!("scroll up update"); 
+            if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
+               let global_focus = &self.focused_pane;
+               if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
+                  if diasm_pane_id.eq(global_pane_id){
+                     let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
+                     let next_line = pos.saturating_sub(1);
+                     self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+                  }
+               }
+            }
+            
+         },
+
+         Event::Ui(Gui::ScrollDown)=>{ 
+            //println!("scroll down update"); 
+            if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
+               let global_focus = &self.focused_pane;
+               if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
+                  if diasm_pane_id.eq(global_pane_id){
+                     let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
+                     let next_line = std::cmp::min(
+                        pos.saturating_add(1),
+                        self.total_disasm_lines
+                     );
+                     self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+                  }
+               }
+            }
+         },
+
+         Event::Ui(Gui::ScrollEvent(id,_,abs_y))=>{
+            //println!("scroll y position: {}",abs_y);
+            if self.total_disasm_lines > BUFFERED_LINE_LIMIT{
+               if abs_y >= 0.9 {
+                  let new_line_count = self.diasm_windows.scroll_position(&id)
+                     .expect("should only get scroll down events from windows that have not been deleted")
+                     .saturating_add(1);
+
+
+                  self.diasm_windows.record_line_offset(
+                     id.clone(),
+                     std::cmp::min(new_line_count,self.total_disasm_lines)
+                  );
+               }else{
+                  if abs_y <= 0.1 && (*self.diasm_windows.scroll_position(&id).unwrap() != 0){
+                     
+                     println!("scrolling up");
+                     let new_line_count = self.diasm_windows.scroll_position(&id)
+                        .unwrap()
+                        .saturating_sub(1);
+                        
+                     self.diasm_windows.record_line_offset(
+                        id.clone(),
+                        new_line_count
+                     );
+                  }
+               }
+            }
          },
 
          Event::Ui(Gui::SubmitBkptClear)=>{
@@ -1488,7 +1628,6 @@ fn centre_disassembler(dis_windows: &Window, disasm: &String,ir: u32)->Option<ic
 use iced::futures::channel::mpsc as iced_mpsc;
 use iced::futures::sink::SinkExt;
 
-use self::{searchbar::SearchBar, window::{Window, ExplorerMap}}; 
 #[derive(Debug,Clone)]
 pub enum Debug{
    Halt(HaltType),
@@ -1521,7 +1660,13 @@ pub enum Gui{
    CloseSearchBar,
    SetSearchInput(String),
    CentreDisassembler,
-   ToggleRegisterDisplay(u32)
+   ToggleRegisterDisplay(u32),
+   ScrollEvent(iced::widget::scrollable::Id,f32,f32),
+   MouseEntered,
+   MouseHover(iced::Point),
+   MouseLeft,
+   ScrollDown,
+   ScrollUp
 }
 
 #[derive(Debug,Clone)]
