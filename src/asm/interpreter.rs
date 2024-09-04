@@ -439,7 +439,7 @@ P: FnMut(usize,&[u8],&mut SymbolTable)->T,
    result 
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct TextPosition{
    pub line_number: usize,
    pub line_offset: usize

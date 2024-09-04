@@ -462,17 +462,7 @@ fn pane_render<'a>(
          let search_results = if app.searchbar.is_some(){
             app.searchbar.as_ref().unwrap().text_occurances()
          }else{
-            vec![]
-         };
-
-         let current_search_result = |r: &Vec<TextPosition>, counter: usize|{
-            if r.is_empty(){
-               return None
-            }
-            if counter >= r.len(){
-               return None;
-            }
-            return Some(r[counter].line_number);
+            std::collections::BTreeMap::new()
          };
 
          let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![];
@@ -481,6 +471,8 @@ fn pane_render<'a>(
          let rendering_text = if app.total_disasm_lines > BUFFERED_LINE_LIMIT{
             let ref_id  = app.diasm_windows.id_of(id).unwrap().clone();
             let starting_line = app.diasm_windows.scroll_position(&ref_id).unwrap().clone();
+            line_number = starting_line;
+            //println!("viewable in buffer abs lines {} - {}",line_number,line_number + VIEWPORT_LINES);
             line_buffer(&app.disasm,starting_line, starting_line + VIEWPORT_LINES)
          }else{
             &app.disasm
@@ -513,31 +505,34 @@ fn pane_render<'a>(
                //println!("c line : {}",line);
                let bkpt_end = line.find(':').unwrap();
                let (bkpt_area,rest_of_line) = line.split_at(bkpt_end);
-               let current = current_search_result(&search_results,sr_idx);
-               let inner_text  = if current.is_some_and(|sr| sr == line_number){
-                  let focused = app.searchbar.as_ref()
+               let maybe_current = search_results.get(&line_number);
+               //println!("current result {:?}",maybe_current);
+               let inner_text  = if maybe_current.is_some(){
+                  let current = &maybe_current.as_ref().unwrap()[0];
+                  let focused = app.searchbar
+                     .as_ref()
                      .unwrap()
-                     .is_nth_term_focused(sr_idx);
+                     .is_focused(current);
 
                   let len = app.searchbar.as_ref().unwrap().target.len();
                   dbg_ln!("bkpt end: {}",bkpt_end);
-                  if search_results[sr_idx].line_offset < bkpt_end{
-                     println!("calc = {} result len = {}",bkpt_end - search_results[sr_idx].line_offset,len);
+                  if current.line_offset < bkpt_end{
+                     //println!("calc = {} result len = {}",bkpt_end - current.line_offset,len);
                      let bkpt_hi_end = std::cmp::min(
-                        (search_results[sr_idx].line_offset ..search_results[sr_idx].line_offset + len).len(),
-                        (search_results[sr_idx].line_offset ..bkpt_end).len(),
+                        (current.line_offset ..current.line_offset + len).len(),
+                        (current.line_offset ..bkpt_end).len(),
                      );
                      let bkpt_highlighted = highlight_region(
                         bkpt_area,
-                        search_results[sr_idx].line_offset,
+                        current.line_offset,
                         bkpt_hi_end,
                         focused,
                         Some((normal_colour,normal_font))
                      );
 
-                     let other_highlighted: Element<Event> = if search_results[sr_idx].line_offset + len > bkpt_end{
-                        println!("term doesnt fit inside breakpoint");
-                        let rem_len = (search_results[sr_idx].line_offset + len) - bkpt_end;
+                     let other_highlighted: Element<Event> = if current.line_offset + len > bkpt_end{
+                        //println!("term doesnt fit inside breakpoint");
+                        let rem_len = (current.line_offset + len) - bkpt_end;
                         highlight_region(
                            rest_of_line, 
                            0,
@@ -576,7 +571,7 @@ fn pane_render<'a>(
                         ),
                         highlight_region(
                            rest_of_line,
-                           search_results[sr_idx].line_offset - bkpt_end,
+                           current.line_offset - bkpt_end,
                            len,
                            focused,
                            Some((normal_colour,normal_font))
@@ -610,6 +605,7 @@ fn pane_render<'a>(
             }else{
                text_box = text_box.push(text("\n"));
             }
+            //println!("rendered line {}",line_number);
             line_number += 1;
          }
          let ref_id  = app.diasm_windows.id_of(id).unwrap().clone();
@@ -1163,7 +1159,8 @@ impl Application for App{
 
             match maybe_position{
                 Some(position) => {
-                   let total_lines = self.disasm.lines().count();
+                   //let total_lines = self.disasm.lines().count();
+                   /*
                    let ratio = position.line_number as f32 / total_lines as f32;
                    dbg_ln!("estimated ratio {} / {} =  {}",
                            position.line_number,
@@ -1175,6 +1172,11 @@ impl Application for App{
                          id.clone(),
                          scrollable::RelativeOffset { x: 0.0, y: ratio }
                       );
+                   }
+                   */
+                   //dbg_ln!("focusing search result on abs line {}",position.line_number);
+                   if let Some(new_cmd) = centre_disassembler(&mut self.diasm_windows, position.line_number){
+                      cmd = new_cmd;
                    }
                 },
                 None => println!("no matches found"),
@@ -1216,8 +1218,11 @@ impl Application for App{
          },
 
          Event::Ui(Gui::CentreDisassembler)=>{
-            if let Some(c) = centre_disassembler(&self.diasm_windows, &self.disasm, self.sys_view.raw_ir){
-               cmd = c;
+            //let ir_ln = get_pc_text_position(&self.disasm,self.sys_view.raw_ir);
+            if let Some(ir_ln) = get_pc_text_position(&self.disasm,self.sys_view.raw_ir){
+               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln){
+                  cmd = c;
+               }
             }
          },
 
@@ -1351,6 +1356,7 @@ impl Application for App{
             }
          },
 
+         //TODO fix highlighting of search results upon scroll
          Event::Ui(Gui::ScrollEvent(id,_,abs_y))=>{
             //println!("scroll y position: {}",abs_y);
             if self.total_disasm_lines > BUFFERED_LINE_LIMIT{
@@ -1504,8 +1510,10 @@ impl Application for App{
             let sys = self.sync_sys.try_lock().unwrap();
             self.trace_record = sys.trace.clone();
             self.sys_view = sys.deref().into();
-            if let Some(c) = centre_disassembler(&self.diasm_windows, &self.disasm, self.sys_view.raw_ir){
-               cmd = c;
+            if let Some(ir_ln) = get_pc_text_position(&self.disasm,self.sys_view.raw_ir){
+               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln){
+                  cmd = c;
+               }
             }
          }
          _ => todo!()
@@ -1575,8 +1583,7 @@ fn pane_titles(kind: &PaneType, focused: bool) -> pane_grid::TitleBar<Event> {
    }
 }
 
-fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
-   let mut ir_ln: usize = 0;
+fn get_pc_text_position(disasm: &String, ir: u32)->Option<usize>{
    let mut line_number: usize = 0;
 
    for line in disasm.lines(){
@@ -1591,7 +1598,7 @@ fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
                   16
                   ).unwrap();
                if add_v == ir{
-                  ir_ln = line_number;
+                  return Some(line_number);
                }
             },
             _ => {}
@@ -1599,25 +1606,33 @@ fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
       }
       line_number += 1;
    }
-   (ir_ln,line_number)
+   return None;
 }
 
-fn centre_disassembler(dis_windows: &Window, disasm: &String,ir: u32)->Option<iced::Command<Event>>{
+fn centre_disassembler(dis_windows: &mut Window,ir_ln: usize)->Option<iced::Command<Event>>{
    //let mut ir_ln = 0_u32;
    //let mut line_number = 0_u32;
-   let (ir_ln,total_lines) = get_pc_text_position(disasm,ir);
-   let y_ratio = (ir_ln as f32) / total_lines as f32;
-   dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
-   if let Some(id) = dis_windows.get_focused_pane(){
-      dbg_ln!("snapping to {:?}",id);
-      let cmd = iced::widget::scrollable::snap_to(
-         id.clone(),
-         scrollable::RelativeOffset { x: 0.0, y: y_ratio }
-      );
-      return Some(cmd);
-   }else{
-      return None;
-   }
+   //let (ir_ln,total_lines) = get_pc_text_position(disasm,ir);
+      let base_position = ir_ln - (ir_ln % VIEWPORT_LINES);
+      let top_position = base_position + VIEWPORT_LINES - 1;
+      let y_ratio = (ir_ln - base_position) as f32 / VIEWPORT_LINES as f32;
+      //dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
+      if let Some(id) = dis_windows.get_focused_pane(){
+         dbg_ln!("snapping window {:?}",id);
+         dbg_ln!("selected new window viewport {} -> {}",base_position,top_position);
+
+         let cmd = iced::widget::scrollable::snap_to(
+            id.clone(),
+            scrollable::RelativeOffset { x: 0.0, y: y_ratio }
+         );
+
+         dis_windows.record_line_offset(id.clone(),base_position);
+
+         return Some(cmd);
+      }else{
+         return None;
+      }
+   //let y_ratio = (ir_ln as f32) / total_lines as f32;
 }
 
 /*pub enum Breakpoint{
