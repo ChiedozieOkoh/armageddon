@@ -1175,7 +1175,7 @@ impl Application for App{
                    }
                    */
                    //dbg_ln!("focusing search result on abs line {}",position.line_number);
-                   if let Some(new_cmd) = centre_disassembler(&mut self.diasm_windows, position.line_number){
+                   if let Some(new_cmd) = centre_disassembler(&mut self.diasm_windows, position.line_number, self.total_disasm_lines){
                       cmd = new_cmd;
                    }
                 },
@@ -1220,7 +1220,7 @@ impl Application for App{
          Event::Ui(Gui::CentreDisassembler)=>{
             //let ir_ln = get_pc_text_position(&self.disasm,self.sys_view.raw_ir);
             if let Some(ir_ln) = get_pc_text_position(&self.disasm,self.sys_view.raw_ir){
-               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln){
+               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln, self.total_disasm_lines){
                   cmd = c;
                }
             }
@@ -1326,34 +1326,37 @@ impl Application for App{
          //TODO remove standard scrollbars 
          Event::Ui(Gui::ScrollUp)=>{ 
             //println!("scroll up update"); 
-            if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
-               let global_focus = &self.focused_pane;
-               if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
-                  if diasm_pane_id.eq(global_pane_id){
-                     let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
-                     let next_line = pos.saturating_sub(1);
-                     self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+            if self.total_disasm_lines > BUFFERED_LINE_LIMIT{
+               if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
+                  let global_focus = &self.focused_pane;
+                  if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
+                     if diasm_pane_id.eq(global_pane_id){
+                        let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
+                        let next_line = pos.saturating_sub(1);
+                        self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+                     }
                   }
                }
-            }
-            
+            } 
          },
 
          Event::Ui(Gui::ScrollDown)=>{ 
             //println!("scroll down update"); 
-            if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
-               let global_focus = &self.focused_pane;
-               if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
-                  if diasm_pane_id.eq(global_pane_id){
-                     let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
-                     let next_line = std::cmp::min(
-                        pos.saturating_add(1),
-                        self.total_disasm_lines
-                     );
-                     self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+            if self.total_disasm_lines > BUFFERED_LINE_LIMIT { 
+               if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
+                  let global_focus = &self.focused_pane;
+                  if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
+                     if diasm_pane_id.eq(global_pane_id){
+                        let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
+                        let next_line = std::cmp::min(
+                           pos.saturating_add(1),
+                           self.total_disasm_lines
+                        );
+                        self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+                     }
                   }
                }
-            }
+            } 
          },
 
          //TODO fix highlighting of search results upon scroll
@@ -1511,7 +1514,7 @@ impl Application for App{
             self.trace_record = sys.trace.clone();
             self.sys_view = sys.deref().into();
             if let Some(ir_ln) = get_pc_text_position(&self.disasm,self.sys_view.raw_ir){
-               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln){
+               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln, self.total_disasm_lines){
                   cmd = c;
                }
             }
@@ -1609,29 +1612,34 @@ fn get_pc_text_position(disasm: &String, ir: u32)->Option<usize>{
    return None;
 }
 
-fn centre_disassembler(dis_windows: &mut Window,ir_ln: usize)->Option<iced::Command<Event>>{
-   //let mut ir_ln = 0_u32;
-   //let mut line_number = 0_u32;
-   //let (ir_ln,total_lines) = get_pc_text_position(disasm,ir);
-      let base_position = ir_ln - (ir_ln % VIEWPORT_LINES);
+//TODO make compatible with centring when working with default scrollbar and small buffers
+fn centre_disassembler(dis_windows: &mut Window,ir_ln: usize,total_lines: usize)->Option<iced::Command<Event>>{
+   let mut base_position = 0;
+   let y_ratio = if total_lines > BUFFERED_LINE_LIMIT{
+      base_position = ir_ln - (ir_ln % VIEWPORT_LINES);
       let top_position = base_position + VIEWPORT_LINES - 1;
-      let y_ratio = (ir_ln - base_position) as f32 / VIEWPORT_LINES as f32;
-      //dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
-      if let Some(id) = dis_windows.get_focused_pane(){
-         dbg_ln!("snapping window {:?}",id);
-         dbg_ln!("selected new window viewport {} -> {}",base_position,top_position);
+      (ir_ln - base_position) as f32 / VIEWPORT_LINES as f32
+   }else{
+      ir_ln as f32 / total_lines as f32
+   };
+   //dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
+   if let Some(id) = dis_windows.get_focused_pane(){
+      dbg_ln!("snapping window {:?}",id);
+      dbg_ln!("selected new window viewport {} -> {}",base_position,top_position);
 
-         let cmd = iced::widget::scrollable::snap_to(
-            id.clone(),
-            scrollable::RelativeOffset { x: 0.0, y: y_ratio }
-         );
+      let cmd = iced::widget::scrollable::snap_to(
+         id.clone(),
+         scrollable::RelativeOffset { x: 0.0, y: y_ratio }
+      );
 
+      if total_lines > BUFFERED_LINE_LIMIT{
          dis_windows.record_line_offset(id.clone(),base_position);
-
-         return Some(cmd);
-      }else{
-         return None;
       }
+
+      return Some(cmd);
+   }else{
+      return None;
+   }
    //let y_ratio = (ir_ln as f32) / total_lines as f32;
 }
 
