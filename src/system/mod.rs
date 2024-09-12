@@ -2625,9 +2625,13 @@ fn write_to_memory_mapped_register(sys: &mut System, address: u32, v: u32)->Resu
       return Err(ArmException::HardFault("Access to PPB must be privileged".into()));
    }
    fault_if_not_aligned(address, 4)?;
-   let ppb_register = MemoryMappedRegister::from_address(address).unwrap();
-   println!("detected write to PPB ({:?})",ppb_register);
-   ppb_register.update(sys, v);
+
+   if let Some(ppb_register) = MemoryMappedRegister::from_address(address){
+      println!("detected write to PPB ({:?})",ppb_register);
+      ppb_register.update(sys,v);
+   }else{
+      println!("WARN: write to PPB address {:x} is not associated with any implemented PPB register, it will be ignored",address);
+   }
    return Ok(());
 }
 
@@ -2637,8 +2641,12 @@ fn load_memory_mapped_register(sys: &System, address: u32)->Result<u32,ArmExcept
       return Err(ArmException::HardFault("Access to PPB must be privileged".into()));
    }
    fault_if_not_aligned(address, 4)?;
-   let system_register = MemoryMappedRegister::from_address(address).unwrap();
-   return Ok(system_register.read(sys));
+   if let Some(system_register) = MemoryMappedRegister::from_address(address){
+      return Ok(system_register.read(sys));
+   }else{
+      println!("WARN: read from PPB address {:x} is not associated with any implemented PPB register, it will return 0",address);
+      return Ok(0);
+   }
 }
 
 pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],ArmException>{
