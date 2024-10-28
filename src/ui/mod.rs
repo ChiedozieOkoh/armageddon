@@ -962,7 +962,7 @@ impl Application for App{
       //assert_eq!(2,Arc::strong_count(&async_copy),"only one instance runs in continue mode, only one instance runs in step mode");
       let sim_runtime = iced::subscription::channel(0, 1, |mut output| async move {
          let (sndr, mut rcvr)  = iced_mpsc::channel(10);
-         output.send(Event::Dbg(Debug::Connect(sndr))).await;
+         let _ = output.send(Event::Dbg(Debug::Connect(sndr))).await;
          let mut halt = None;
          loop{
             match rcvr.select_next_some().await{
@@ -1420,7 +1420,7 @@ impl Application for App{
                    if self.breakpoints.contains(&addr){
                       match self.cmd_sender{
                          Some(ref mut sndr) =>{
-                            sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
+                            let _ = sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
                             self.breakpoints.retain(|x| *x != addr);
                          },
                          None => {panic!("cannot interact with dbg session")}
@@ -1428,7 +1428,7 @@ impl Application for App{
                    }else{
                       match self.cmd_sender{
                          Some(ref mut sndr)=>{
-                            sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
+                             let _ = sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
                             self.breakpoints.push(addr);
                          },
                          None => {panic!("cannot interact with dbg session")}
@@ -1443,7 +1443,7 @@ impl Application for App{
             if self.breakpoints.contains(&addr){
                match self.cmd_sender{
                   Some(ref mut sndr) =>{
-                     sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
+                     let _ = sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
                      self.breakpoints.retain(|x| *x != addr);
                   },
                   None => {panic!("cannot interact with dbg session")}
@@ -1451,7 +1451,7 @@ impl Application for App{
             }else{
                match self.cmd_sender{
                   Some(ref mut sndr)=>{
-                     sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
+                     let _ = sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
                      self.breakpoints.push(addr);
                   },
                   None => {panic!("cannot interact with dbg session")}
@@ -1463,7 +1463,14 @@ impl Application for App{
             use std::sync::TryLockError;
             match self.sync_sys.try_lock(){
                Ok(mut sys)=>{
-                  Simulator::step_or_signal_halt(&mut sys).unwrap();
+                  match Simulator::step_or_signal_halt(&mut sys){
+                     Ok(_)=> {},
+                     Err(Debug::Halt(HaltType::lockup)) => {
+                        println!("Simulator reached a lockup error condition");
+                        println!("The Simulator needs to be reset before it can resume  normal execution");
+                     },
+                     Err(e) => { println!("Halted due to {:?}",e); }
+                  }
                   self.trace_record = sys.trace.clone();
                   self.sys_view = sys.deref().into();
                },
@@ -1625,7 +1632,6 @@ fn centre_disassembler(dis_windows: &mut Window,ir_ln: usize,total_lines: usize)
    //dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
    if let Some(id) = dis_windows.get_focused_pane(){
       dbg_ln!("snapping window {:?}",id);
-      dbg_ln!("selected new window viewport {} -> {}",base_position,top_position);
 
       let cmd = iced::widget::scrollable::snap_to(
          id.clone(),

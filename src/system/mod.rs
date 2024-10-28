@@ -672,7 +672,7 @@ impl System{
          xpsr & (!(1 << 9))
       };
 
-      let next_instr_address = exc_type.return_address(self.registers.pc as u32,offset,true);
+      let next_instr_address = exc_type.return_address(self.registers.pc as u32,offset);
 
       let offset = std::mem::size_of::<ProcessStackFrame>();
       let maybe_frame_ptr = sp.checked_sub(offset as u32);
@@ -2822,7 +2822,7 @@ impl ArmException{
       }
    }
 
-   pub fn return_address(&self,current_address: u32, offset: i32, sync: bool)-> u32{
+   pub fn return_address(&self,current_address: u32, offset: i32)-> u32{
 
       let next: u32 = if offset.is_negative(){
          current_address - (offset.wrapping_abs() as u32) & 0xFFFFFFFE
@@ -2833,7 +2833,7 @@ impl ArmException{
       match self{
          ArmException::Reset => panic!("cannot return from reset exception"),
          ArmException::Nmi => next,
-         ArmException::HardFault(_) => if sync{ current_address }else{ next },
+         ArmException::HardFault(_) => current_address,
          ArmException::Svc => next,
          ArmException::PendSV => next,
          ArmException::SysTick => next,

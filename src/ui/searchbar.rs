@@ -37,8 +37,6 @@ impl SearchBar{
    pub fn help(&self)->String{
       match &self.kind{
          Kind::Code => "(Code search): Search the disassembled text".into(),
-         Kind::Ascii => "(Ascii search): Search the binary for an ascii sequence".into(),
-         Kind::Num(t) => format!("({} search): Search the binary for a {} sequence",t,t),
       }
    }
 
@@ -146,12 +144,6 @@ impl SearchBar{
             let places = find_string_position(disasm, &self.target);
             self.occurances = Occurance::Text(places);
             Ok(())
-         },
-         Kind::Ascii =>{
-            todo!()
-         },
-         Kind::Num(n)=>{
-            todo!()
          }
       }
    }
@@ -159,17 +151,5 @@ impl SearchBar{
 
 pub enum Kind{
    Code,
-   Ascii,
-   Num(Cast)
 }
 
-pub static KIND_OPTIONS: &[Kind] = &[
-   Kind::Code,
-   //Kind::Ascii,
-   //Kind::Num(Cast::UWORD),
-   //Kind::Num(Cast::IWORD),
-   //Kind::Num(Cast::UHALF),
-   //Kind::Num(Cast::IHALF),
-   //Kind::Num(Cast::UBYTE),
-   //Kind::Num(Cast::IBYTE)
-];

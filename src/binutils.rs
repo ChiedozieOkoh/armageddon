@@ -142,17 +142,6 @@ pub fn smin<const L: u32>()->i32{
    signed_bitfield::<L>(min.into()) as i32
 }
 
-pub fn clear_extra<const L: u32>(a: u32)->u32{
-   let mask: u32 = !(1 << (L - 1)) | ((1 << (L-1)));
-   (a & mask)
-}
-
-pub fn clear_extra_64b<const L: u32>(a: u64)->u64{
-   let mask = ((1 << (L - 1)) - 1) | ((1 << (L-1)));
-   println!("extra: {:x} & {:x}",a,mask);
-   (a & mask)
-}
-
 pub fn signed_bitfield<const L: u32>(a: BitField<L>)->i32{
    //dbg_ln!("making signed bitfield");
    if get_bit(L - 1,a.0)  == 0{
