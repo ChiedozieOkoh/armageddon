@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::num::Wrapping;
 
-use crate::asm::interpreter::print_instruction;
+use crate::asm::interpreter::serialise_instruction;
 use crate::asm::{self, PROGRAM_COUNTER, DestRegister, SrcRegister, Literal};
 use crate::binutils::{from_arm_bytes, clear_bit, set_bit, into_arm_bytes, get_set_bits, sign_extend_u32, from_arm_bytes_16b, BitField, sign_extend};
 use crate::asm::decode::{Opcode, instruction_size, InstructionSize, B16, B32};
@@ -13,9 +13,12 @@ use crate::system::instructions::{add_immediate,ConditionFlags,compare,subtract,
 use self::instructions::{cond_passed, shift_left, shift_right};
 use self::registers::{Registers, Apsr, SpecialRegister, get_overflow_bit};
 
+use crate::system::trace::Trace;
+
 pub mod registers;
 pub mod instructions;
 pub mod simulator;
+pub mod trace;
 
 pub struct System{
    pub registers: Registers,
@@ -29,7 +32,8 @@ pub struct System{
    //pub memory: Vec<u8>,
    pub breakpoints: Vec<usize>,
    pub trace_enabled: bool,
-   pub trace: String,
+   //pub trace: String,
+   pub trace: Trace,
    pub alloc: BlockAllocator,
    pub reset_cfg: Option<ResetCfg>,
    pub vtor_override: Option<u32>,
@@ -229,7 +233,8 @@ impl System{
          //memory: vec![0;capacity],
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new(),
+         //trace: String::new(),
+         trace: Trace::create(200),
          alloc: BlockAllocator::create(),
          reset_cfg: None,
          vtor_override: None,
@@ -252,7 +257,8 @@ impl System{
          //memory: Vec::new(),
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new(),
+         //trace: String::new(),
+         trace: Trace::create(200),
          alloc: BlockAllocator::fill(text),
          reset_cfg: None,
          vtor_override: None,
@@ -293,7 +299,8 @@ impl System{
          //memory: Vec::new(),
          breakpoints: Vec::new(),
          trace_enabled: false,
-         trace: String::new(),
+         //trace: String::new(),
+         trace: Trace::create(200),
          alloc: BlockAllocator::init(memory),
          reset_cfg: None,
          vtor_override: None,
@@ -665,7 +672,7 @@ impl System{
          xpsr & (!(1 << 9))
       };
 
-      let next_instr_address = exc_type.return_address(self.registers.pc as u32,offset,true);
+      let next_instr_address = exc_type.return_address(self.registers.pc as u32,offset);
 
       let offset = std::mem::size_of::<ProcessStackFrame>();
       let maybe_frame_ptr = sp.checked_sub(offset as u32);
@@ -953,17 +960,36 @@ impl System{
                if matches!(code,Opcode::_16Bit(B16::B_ALWAYS)){
                   let offset = unpack_operands!(operands,Operands::B_ALWAYS,off);
                   if offset != 0{
-                     self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                     serialise_instruction(
+                        self.trace.get(),
+                        self.registers.pc as u32,
+                        &code,
+                        &operands
+                     );
+                     //self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
                      self.trace.push('\n');
+                     self.trace.trim();
                   }else{
                      if !self.trace.ends_with(COMPRESS_BAL){
-                        self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                        serialise_instruction(
+                           self.trace.get(),
+                           self.registers.pc as u32,
+                           &code,
+                           &operands
+                        );
                         self.trace.push_str(COMPRESS_BAL);
                      }
                   }
                }else{
-                  self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
+                  serialise_instruction(
+                     &mut self.trace.get(),
+                     self.registers.pc as u32,
+                     &code,
+                     &operands
+                  );
+                  //self.trace.push_str(&print_instruction(self.registers.pc as u32 , &code, &operands));
                   self.trace.push('\n');
+                  self.trace.trim();
                }
             }
             match code {
@@ -2252,8 +2278,15 @@ impl System{
             let instr_32b = Opcode::from(word);
             let operands = get_operands_32b(&instr_32b, word);
             if self.trace_enabled{
-               self.trace.push_str(&print_instruction(self.registers.pc as u32 , &instr_32b, &operands));
+                  serialise_instruction(
+                     &mut self.trace.get(),
+                     self.registers.pc as u32,
+                     &instr_32b,
+                     &operands
+                  );
+               //self.trace.push_str(&print_instruction(self.registers.pc as u32 , &instr_32b, &operands));
                self.trace.push('\n');
+               self.trace.trim();
             }
             match instr_32b{
                Opcode::_32Bit(B32::MSR) => {
@@ -2592,9 +2625,13 @@ fn write_to_memory_mapped_register(sys: &mut System, address: u32, v: u32)->Resu
       return Err(ArmException::HardFault("Access to PPB must be privileged".into()));
    }
    fault_if_not_aligned(address, 4)?;
-   let ppb_register = MemoryMappedRegister::from_address(address).unwrap();
-   println!("detected write to PPB ({:?})",ppb_register);
-   ppb_register.update(sys, v);
+
+   if let Some(ppb_register) = MemoryMappedRegister::from_address(address){
+      println!("detected write to PPB ({:?})",ppb_register);
+      ppb_register.update(sys,v);
+   }else{
+      println!("WARN: write to PPB address {:x} is not associated with any implemented PPB register, it will be ignored",address);
+   }
    return Ok(());
 }
 
@@ -2604,8 +2641,12 @@ fn load_memory_mapped_register(sys: &System, address: u32)->Result<u32,ArmExcept
       return Err(ArmException::HardFault("Access to PPB must be privileged".into()));
    }
    fault_if_not_aligned(address, 4)?;
-   let system_register = MemoryMappedRegister::from_address(address).unwrap();
-   return Ok(system_register.read(sys));
+   if let Some(system_register) = MemoryMappedRegister::from_address(address){
+      return Ok(system_register.read(sys));
+   }else{
+      println!("WARN: read from PPB address {:x} is not associated with any implemented PPB register, it will return 0",address);
+      return Ok(0);
+   }
 }
 
 pub fn load_memory<const T: usize>(sys: &System, v_addr: u32)->Result<[u8;T],ArmException>{
@@ -2781,7 +2822,7 @@ impl ArmException{
       }
    }
 
-   pub fn return_address(&self,current_address: u32, offset: i32, sync: bool)-> u32{
+   pub fn return_address(&self,current_address: u32, offset: i32)-> u32{
 
       let next: u32 = if offset.is_negative(){
          current_address - (offset.wrapping_abs() as u32) & 0xFFFFFFFE
@@ -2792,7 +2833,7 @@ impl ArmException{
       match self{
          ArmException::Reset => panic!("cannot return from reset exception"),
          ArmException::Nmi => next,
-         ArmException::HardFault(_) => if sync{ current_address }else{ next },
+         ArmException::HardFault(_) => current_address,
          ArmException::Svc => next,
          ArmException::PendSV => next,
          ArmException::SysTick => next,

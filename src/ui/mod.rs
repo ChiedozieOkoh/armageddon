@@ -19,6 +19,8 @@ const TEXT_SIZE: u16 = 11;
 pub mod searchbar;
 pub mod window;
 
+use self::{searchbar::SearchBar, window::{Window, ExplorerMap, line_buffer}}; 
+
 pub struct App{
    _state: pane_grid::State<PaneType>,
    n_panes: usize,
@@ -28,6 +30,7 @@ pub struct App{
    explorer_map: ExplorerMap,
    entry_point: usize,
    pub disasm: String,
+   total_disasm_lines: usize,
    register_hex_display: [bool;13],
    searchbar: Option<SearchBar>,
    symbols: Vec<SymbolDefinition>,
@@ -443,6 +446,9 @@ fn highlight_region<'a>(line: &str,start: usize, len: usize, _focus: bool, norma
    text_box.padding(0).height(iced::Length::Shrink)
 }
 
+const BUFFERED_LINE_LIMIT: usize = 400;
+const VIEWPORT_LINES: usize = 50;
+
 fn pane_render<'a>(
    app: &App,
    id: &pane_grid::Pane,
@@ -456,24 +462,24 @@ fn pane_render<'a>(
          let search_results = if app.searchbar.is_some(){
             app.searchbar.as_ref().unwrap().text_occurances()
          }else{
-            vec![]
-         };
-
-         let current_search_result = |r: &Vec<TextPosition>, counter: usize|{
-            if r.is_empty(){
-               return None
-            }
-            if counter >= r.len(){
-               return None;
-            }
-            return Some(r[counter].line_number);
+            std::collections::BTreeMap::new()
          };
 
          let mut text_box: iced::widget::Column<'a,Event,iced::Renderer> = column![];
          text_box = text_box.spacing(0).padding(0).height(iced::Length::Shrink);
 
-         for line in app.disasm.lines(){
+         let rendering_text = if app.total_disasm_lines > BUFFERED_LINE_LIMIT{
+            let ref_id  = app.diasm_windows.id_of(id).unwrap().clone();
+            let starting_line = app.diasm_windows.scroll_position(&ref_id).unwrap().clone();
+            line_number = starting_line;
+            //println!("viewable in buffer abs lines {} - {}",line_number,line_number + VIEWPORT_LINES);
+            line_buffer(&app.disasm,starting_line, starting_line + VIEWPORT_LINES)
+         }else{
+            &app.disasm
+         };
+         for line in rendering_text.lines(){
             if !line.trim().is_empty(){
+               //println!("cur line: {}",line);
                let offset = line.split(":").next().unwrap();
                let addr = u32::from_str_radix(
                   offset.trim().trim_start_matches("0x").trim(),
@@ -496,33 +502,37 @@ fn pane_render<'a>(
                   iced::color!(0,0,0)
                };
 
+               //println!("c line : {}",line);
                let bkpt_end = line.find(':').unwrap();
                let (bkpt_area,rest_of_line) = line.split_at(bkpt_end);
-               let current = current_search_result(&search_results,sr_idx);
-               let inner_text  = if current.is_some_and(|sr| sr == line_number){
-                  let focused = app.searchbar.as_ref()
+               let maybe_current = search_results.get(&line_number);
+               //println!("current result {:?}",maybe_current);
+               let inner_text  = if maybe_current.is_some(){
+                  let current = &maybe_current.as_ref().unwrap()[0];
+                  let focused = app.searchbar
+                     .as_ref()
                      .unwrap()
-                     .is_nth_term_focused(sr_idx);
+                     .is_focused(current);
 
                   let len = app.searchbar.as_ref().unwrap().target.len();
                   dbg_ln!("bkpt end: {}",bkpt_end);
-                  if search_results[sr_idx].line_offset < bkpt_end{
-                     println!("calc = {} result len = {}",bkpt_end - search_results[sr_idx].line_offset,len);
+                  if current.line_offset < bkpt_end{
+                     //println!("calc = {} result len = {}",bkpt_end - current.line_offset,len);
                      let bkpt_hi_end = std::cmp::min(
-                        (search_results[sr_idx].line_offset ..search_results[sr_idx].line_offset + len).len(),
-                        (search_results[sr_idx].line_offset ..bkpt_end).len(),
+                        (current.line_offset ..current.line_offset + len).len(),
+                        (current.line_offset ..bkpt_end).len(),
                      );
                      let bkpt_highlighted = highlight_region(
                         bkpt_area,
-                        search_results[sr_idx].line_offset,
+                        current.line_offset,
                         bkpt_hi_end,
                         focused,
                         Some((normal_colour,normal_font))
                      );
 
-                     let other_highlighted: Element<Event> = if search_results[sr_idx].line_offset + len > bkpt_end{
-                        println!("term doesnt fit inside breakpoint");
-                        let rem_len = (search_results[sr_idx].line_offset + len) - bkpt_end;
+                     let other_highlighted: Element<Event> = if current.line_offset + len > bkpt_end{
+                        //println!("term doesnt fit inside breakpoint");
+                        let rem_len = (current.line_offset + len) - bkpt_end;
                         highlight_region(
                            rest_of_line, 
                            0,
@@ -561,7 +571,7 @@ fn pane_render<'a>(
                         ),
                         highlight_region(
                            rest_of_line,
-                           search_results[sr_idx].line_offset - bkpt_end,
+                           current.line_offset - bkpt_end,
                            len,
                            focused,
                            Some((normal_colour,normal_font))
@@ -595,10 +605,19 @@ fn pane_render<'a>(
             }else{
                text_box = text_box.push(text("\n"));
             }
+            //println!("rendered line {}",line_number);
             line_number += 1;
          }
-         //let content = text(&app.disasm).size(TEXT_SIZE).width(iced::Length::Fill).style(iced::color!(100,0,0));
-         container(scrollable(text_box.spacing(0)).id(app.diasm_windows.id_of(id).unwrap().clone()))
+         let ref_id  = app.diasm_windows.id_of(id).unwrap().clone();
+         let bar_id = ref_id.clone();
+         container(
+               scrollable(text_box.spacing(0))
+                  .id(ref_id)
+                  .on_scroll(move |vp| {
+                     let abs = vp.relative_offset();
+                     Event::Ui(Gui::ScrollEvent(bar_id.clone(),abs.x,abs.y))
+                  })
+            )
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
             .into()
@@ -838,6 +857,11 @@ impl Application for App{
       let sync_sys_arc = Arc::new(Mutex::new(sys));
       let mut windows = Window::create();
       windows.add_pane(def.clone());
+      let total_disasm_lines = disassembly.lines().count();
+      if total_disasm_lines > BUFFERED_LINE_LIMIT{
+         let id = windows.id_of(&def).unwrap();
+         windows.record_line_offset(id.clone(),0);
+      }
       (Self{
          _state: state,
          focused_pane: def,
@@ -847,6 +871,7 @@ impl Application for App{
          explorer_map: ExplorerMap::create(),
          sync_sys: sync_sys_arc,
          disasm: disassembly,
+         total_disasm_lines,
          entry_point,
          symbols,
          register_hex_display: [false;13],
@@ -867,6 +892,7 @@ impl Application for App{
 
    fn subscription(&self) -> iced::Subscription<Self::Message> {
       use iced::keyboard::Event as KeyEvent;
+      use iced::mouse::Event as MouseEvent;
       let shortcuts = iced::subscription::events_with(|event, status|{
          match event{
             iced::Event::Keyboard(KeyEvent::KeyReleased { key_code, modifiers }) => match key_code{
@@ -900,6 +926,35 @@ impl Application for App{
                 },
                 _ => None,
             },
+
+            iced::Event::Mouse(MouseEvent::CursorLeft) => {
+               Some(Event::Ui(Gui::MouseLeft))
+            },
+
+            iced::Event::Mouse(MouseEvent::CursorEntered) =>{
+               Some(Event::Ui(Gui::MouseEntered))
+            },
+
+            iced::Event::Mouse(MouseEvent::CursorMoved{position})=>{
+               Some(Event::Ui(Gui::MouseHover(position)))
+            },
+
+            iced::Event::Mouse(MouseEvent::WheelScrolled{delta}) => {
+               match delta{
+                  iced::mouse::ScrollDelta::Lines{x,y}=>{ 
+                     //println!("scrolled {} lines ",y);
+                     if y < 0.0 { return Some(Event::Ui(Gui::ScrollDown)); }
+                     if y > 0.0{ return Some(Event::Ui(Gui::ScrollUp)); }
+                     return None;
+                  },
+                  iced::mouse::ScrollDelta::Pixels{x,y}=>{
+                     //println!("scrolled {} pixels ",y);
+                     if y < 0.0 { return Some(Event::Ui(Gui::ScrollDown)); }
+                     if y > 0.0{ return Some(Event::Ui(Gui::ScrollUp)); }
+                     return None;
+                  }
+               }
+            },
             _ => None
          }
       });
@@ -907,7 +962,7 @@ impl Application for App{
       //assert_eq!(2,Arc::strong_count(&async_copy),"only one instance runs in continue mode, only one instance runs in step mode");
       let sim_runtime = iced::subscription::channel(0, 1, |mut output| async move {
          let (sndr, mut rcvr)  = iced_mpsc::channel(10);
-         output.send(Event::Dbg(Debug::Connect(sndr))).await;
+         let _ = output.send(Event::Dbg(Debug::Connect(sndr))).await;
          let mut halt = None;
          loop{
             match rcvr.select_next_some().await{
@@ -1016,8 +1071,11 @@ impl Application for App{
                let (new_pane,_) = p;
                match kind{
                   PaneType::Disassembler => {
-                     let _  = self.diasm_windows.add_pane(new_pane.clone());
+                     let new_id  = self.diasm_windows.add_pane(new_pane.clone());
                      self.diasm_windows.focus_if_present(&new_pane);
+                     if self.total_disasm_lines > BUFFERED_LINE_LIMIT{
+                        self.diasm_windows.record_line_offset(new_id,0);
+                     }
                   },
                   PaneType::MemoryExplorer =>{
                      let _ = self.memview_windows.add_pane(new_pane.clone());
@@ -1101,7 +1159,8 @@ impl Application for App{
 
             match maybe_position{
                 Some(position) => {
-                   let total_lines = self.disasm.lines().count();
+                   //let total_lines = self.disasm.lines().count();
+                   /*
                    let ratio = position.line_number as f32 / total_lines as f32;
                    dbg_ln!("estimated ratio {} / {} =  {}",
                            position.line_number,
@@ -1113,6 +1172,11 @@ impl Application for App{
                          id.clone(),
                          scrollable::RelativeOffset { x: 0.0, y: ratio }
                       );
+                   }
+                   */
+                   //dbg_ln!("focusing search result on abs line {}",position.line_number);
+                   if let Some(new_cmd) = centre_disassembler(&mut self.diasm_windows, position.line_number, self.total_disasm_lines){
+                      cmd = new_cmd;
                    }
                 },
                 None => println!("no matches found"),
@@ -1154,8 +1218,11 @@ impl Application for App{
          },
 
          Event::Ui(Gui::CentreDisassembler)=>{
-            if let Some(c) = centre_disassembler(&self.diasm_windows, &self.disasm, self.sys_view.raw_ir){
-               cmd = c;
+            //let ir_ln = get_pc_text_position(&self.disasm,self.sys_view.raw_ir);
+            if let Some(ir_ln) = get_pc_text_position(&self.disasm,self.sys_view.raw_ir){
+               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln, self.total_disasm_lines){
+                  cmd = c;
+               }
             }
          },
 
@@ -1241,6 +1308,88 @@ impl Application for App{
             self.register_hex_display[i as usize] = !self.register_hex_display[i as usize];
          },
 
+         //TODO revome cursor_position
+         Event::Ui(Gui::MouseHover(point))=>{
+            self.diasm_windows.cursor_position = Some(point);
+         },
+
+         Event::Ui(Gui::MouseEntered)=>{
+            //println!("mouse entered but we dont know where it is");
+            self.diasm_windows.cursor_position = None;
+         },
+
+         Event::Ui(Gui::MouseLeft)=>{
+            //println!("mouse left the ui so the position has been invalidated");
+            self.diasm_windows.cursor_position = None;
+         },
+
+         //TODO remove standard scrollbars 
+         Event::Ui(Gui::ScrollUp)=>{ 
+            //println!("scroll up update"); 
+            if self.total_disasm_lines > BUFFERED_LINE_LIMIT{
+               if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
+                  let global_focus = &self.focused_pane;
+                  if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
+                     if diasm_pane_id.eq(global_pane_id){
+                        let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
+                        let next_line = pos.saturating_sub(1);
+                        self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+                     }
+                  }
+               }
+            } 
+         },
+
+         Event::Ui(Gui::ScrollDown)=>{ 
+            //println!("scroll down update"); 
+            if self.total_disasm_lines > BUFFERED_LINE_LIMIT { 
+               if let Some(diasm_pane_id) = self.diasm_windows.get_focused_pane(){
+                  let global_focus = &self.focused_pane;
+                  if let Some(global_pane_id) = self.diasm_windows.id_of(global_focus){
+                     if diasm_pane_id.eq(global_pane_id){
+                        let pos = self.diasm_windows.scroll_position(diasm_pane_id).unwrap();
+                        let next_line = std::cmp::min(
+                           pos.saturating_add(1),
+                           self.total_disasm_lines
+                        );
+                        self.diasm_windows.record_line_offset(diasm_pane_id.clone(),next_line);
+                     }
+                  }
+               }
+            } 
+         },
+
+         //TODO fix highlighting of search results upon scroll
+         Event::Ui(Gui::ScrollEvent(id,_,abs_y))=>{
+            //println!("scroll y position: {}",abs_y);
+            if self.total_disasm_lines > BUFFERED_LINE_LIMIT{
+               if abs_y >= 0.9 {
+                  let new_line_count = self.diasm_windows.scroll_position(&id)
+                     .expect("should only get scroll down events from windows that have not been deleted")
+                     .saturating_add(1);
+
+
+                  self.diasm_windows.record_line_offset(
+                     id.clone(),
+                     std::cmp::min(new_line_count,self.total_disasm_lines)
+                  );
+               }else{
+                  if abs_y <= 0.1 && (*self.diasm_windows.scroll_position(&id).unwrap() != 0){
+                     
+                     println!("scrolling up");
+                     let new_line_count = self.diasm_windows.scroll_position(&id)
+                        .unwrap()
+                        .saturating_sub(1);
+                        
+                     self.diasm_windows.record_line_offset(
+                        id.clone(),
+                        new_line_count
+                     );
+                  }
+               }
+            }
+         },
+
          Event::Ui(Gui::SubmitBkptClear)=>{
             match self.cmd_sender{
                Some(ref mut sndr)=>{
@@ -1271,7 +1420,7 @@ impl Application for App{
                    if self.breakpoints.contains(&addr){
                       match self.cmd_sender{
                          Some(ref mut sndr) =>{
-                            sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
+                            let _ = sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
                             self.breakpoints.retain(|x| *x != addr);
                          },
                          None => {panic!("cannot interact with dbg session")}
@@ -1279,7 +1428,7 @@ impl Application for App{
                    }else{
                       match self.cmd_sender{
                          Some(ref mut sndr)=>{
-                            sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
+                             let _ = sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
                             self.breakpoints.push(addr);
                          },
                          None => {panic!("cannot interact with dbg session")}
@@ -1294,7 +1443,7 @@ impl Application for App{
             if self.breakpoints.contains(&addr){
                match self.cmd_sender{
                   Some(ref mut sndr) =>{
-                     sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
+                     let _ = sndr.try_send(Event::Dbg(Debug::DeleteBreakpoint(addr)));
                      self.breakpoints.retain(|x| *x != addr);
                   },
                   None => {panic!("cannot interact with dbg session")}
@@ -1302,7 +1451,7 @@ impl Application for App{
             }else{
                match self.cmd_sender{
                   Some(ref mut sndr)=>{
-                     sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
+                     let _ = sndr.try_send(Event::Dbg(Debug::CreateBreakpoint(addr)));
                      self.breakpoints.push(addr);
                   },
                   None => {panic!("cannot interact with dbg session")}
@@ -1314,7 +1463,14 @@ impl Application for App{
             use std::sync::TryLockError;
             match self.sync_sys.try_lock(){
                Ok(mut sys)=>{
-                  Simulator::step_or_signal_halt(&mut sys).unwrap();
+                  match Simulator::step_or_signal_halt(&mut sys){
+                     Ok(_)=> {},
+                     Err(Debug::Halt(HaltType::lockup)) => {
+                        println!("Simulator reached a lockup error condition");
+                        println!("The Simulator needs to be reset before it can resume  normal execution");
+                     },
+                     Err(e) => { println!("Halted due to {:?}",e); }
+                  }
                   self.trace_record = sys.trace.clone();
                   self.sys_view = sys.deref().into();
                },
@@ -1364,8 +1520,10 @@ impl Application for App{
             let sys = self.sync_sys.try_lock().unwrap();
             self.trace_record = sys.trace.clone();
             self.sys_view = sys.deref().into();
-            if let Some(c) = centre_disassembler(&self.diasm_windows, &self.disasm, self.sys_view.raw_ir){
-               cmd = c;
+            if let Some(ir_ln) = get_pc_text_position(&self.disasm,self.sys_view.raw_ir){
+               if let Some(c) = centre_disassembler(&mut self.diasm_windows, ir_ln, self.total_disasm_lines){
+                  cmd = c;
+               }
             }
          }
          _ => todo!()
@@ -1435,8 +1593,7 @@ fn pane_titles(kind: &PaneType, focused: bool) -> pane_grid::TitleBar<Event> {
    }
 }
 
-fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
-   let mut ir_ln: usize = 0;
+fn get_pc_text_position(disasm: &String, ir: u32)->Option<usize>{
    let mut line_number: usize = 0;
 
    for line in disasm.lines(){
@@ -1451,7 +1608,7 @@ fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
                   16
                   ).unwrap();
                if add_v == ir{
-                  ir_ln = line_number;
+                  return Some(line_number);
                }
             },
             _ => {}
@@ -1459,25 +1616,37 @@ fn get_pc_text_position(disasm: &String, ir: u32)->(usize,usize){
       }
       line_number += 1;
    }
-   (ir_ln,line_number)
+   return None;
 }
 
-fn centre_disassembler(dis_windows: &Window, disasm: &String,ir: u32)->Option<iced::Command<Event>>{
-   //let mut ir_ln = 0_u32;
-   //let mut line_number = 0_u32;
-   let (ir_ln,total_lines) = get_pc_text_position(disasm,ir);
-   let y_ratio = (ir_ln as f32) / total_lines as f32;
-   dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
+//TODO make compatible with centring when working with default scrollbar and small buffers
+fn centre_disassembler(dis_windows: &mut Window,ir_ln: usize,total_lines: usize)->Option<iced::Command<Event>>{
+   let mut base_position = 0;
+   let y_ratio = if total_lines > BUFFERED_LINE_LIMIT{
+      base_position = ir_ln - (ir_ln % VIEWPORT_LINES);
+      let top_position = base_position + VIEWPORT_LINES - 1;
+      (ir_ln - base_position) as f32 / VIEWPORT_LINES as f32
+   }else{
+      ir_ln as f32 / total_lines as f32
+   };
+   //dbg_ln!("estimated ratio {} / {} =  {}",ir_ln,total_lines,y_ratio);
    if let Some(id) = dis_windows.get_focused_pane(){
-      dbg_ln!("snapping to {:?}",id);
+      dbg_ln!("snapping window {:?}",id);
+
       let cmd = iced::widget::scrollable::snap_to(
          id.clone(),
          scrollable::RelativeOffset { x: 0.0, y: y_ratio }
       );
+
+      if total_lines > BUFFERED_LINE_LIMIT{
+         dis_windows.record_line_offset(id.clone(),base_position);
+      }
+
       return Some(cmd);
    }else{
       return None;
    }
+   //let y_ratio = (ir_ln as f32) / total_lines as f32;
 }
 
 /*pub enum Breakpoint{
@@ -1488,7 +1657,6 @@ fn centre_disassembler(dis_windows: &Window, disasm: &String,ir: u32)->Option<ic
 use iced::futures::channel::mpsc as iced_mpsc;
 use iced::futures::sink::SinkExt;
 
-use self::{searchbar::SearchBar, window::{Window, ExplorerMap}}; 
 #[derive(Debug,Clone)]
 pub enum Debug{
    Halt(HaltType),
@@ -1521,7 +1689,13 @@ pub enum Gui{
    CloseSearchBar,
    SetSearchInput(String),
    CentreDisassembler,
-   ToggleRegisterDisplay(u32)
+   ToggleRegisterDisplay(u32),
+   ScrollEvent(iced::widget::scrollable::Id,f32,f32),
+   MouseEntered,
+   MouseHover(iced::Point),
+   MouseLeft,
+   ScrollDown,
+   ScrollUp
 }
 
 #[derive(Debug,Clone)]

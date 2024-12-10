@@ -56,7 +56,7 @@ pub enum Operands{
    Nibble(Literal<4>)
 }
 
-fn fmt_branch_offset(f: &mut fmt::Formatter<'_>,offset: i32)->fmt::Result{
+fn fmt_branch_offset(f: &mut std::fmt::Formatter<'_>,offset: i32)->fmt::Result{
    if offset == 0{
       return write!(f,".");
    }
@@ -64,6 +64,20 @@ fn fmt_branch_offset(f: &mut fmt::Formatter<'_>,offset: i32)->fmt::Result{
       write!(f,". + {}",offset)
    }else{
       write!(f,".{}",offset)
+   }
+}
+
+fn serialise_branch_offset(buffer: &mut String,offset: i32){
+   if offset == 0{
+      buffer.push('.');
+   }else{
+      if offset.is_positive(){
+         buffer.push_str(". + ");
+         u32_to_b10(buffer,offset as u32);
+      }else{
+         buffer.push_str(". - ");
+         u32_to_b10(buffer,offset.unsigned_abs());
+      }
    }
 }
 
@@ -156,6 +170,262 @@ pub fn pretty_print(_address: u32, operands: &Operands)->String{
    return line;
 }
 
+pub fn u32_to_hex(buffer: &mut String , num: u32){
+   let table = ['0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'];
+   buffer.push_str("0x");
+   let mut mask = 0xF0000000;
+   for i in 0 .. 8{
+      let k: usize = ( (num & mask) >> (28 - (i * 4))) as usize;
+      buffer.push(table[k]);
+      mask = mask >> 4;
+   }
+}
+
+pub fn u32_to_b10(buffer: &mut String, mut num: u32){
+   let dict = ['0','1','2','3','4','5','6','7','8','9'];
+   let mut number:  [u32;10] = [0,0,0,0,0,0,0,0,0,0];
+   let mut i = 0;
+   loop{
+      if num < 10 {
+         //println!("{}th digit = {}",i,num);
+         number[i] = num;
+         break;
+      }else{
+         //println!("{}th digit = {}",i,num % 10);
+         //println!("next test = {}",num / 10);
+         number[i] = num % 10;
+         num = num / 10;
+      } 
+
+      i += 1;
+   }
+   for x in (0 ..=i).rev(){
+      buffer.push(dict[number[x] as usize]);
+   }
+}
+
+#[inline]
+pub fn serialise_register(buffer: &mut String, number: u8){
+   let table = ["r0","r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12"];
+   match number{
+      0 ..=12 => buffer.push_str(table[number as usize]),
+      13 => buffer.push_str("SP"),
+      14 => buffer.push_str("LR"),
+      15 => buffer.push_str("PC"),
+      _ => unreachable!("invalid register number")
+   }
+}
+
+//TODO implement this without write! macro
+
+pub fn serialise_operand(buffer: &mut String, operands: &Operands, address: u32){
+   match operands{
+      Operands::ADD_REG_SP_IMM8(r, imm8) => {
+         serialise_register(buffer,r.0);
+         buffer.push_str(", SP, #");
+         u32_to_b10(buffer,imm8.0);
+      },
+      Operands::INCR_SP_BY_IMM7(imm7) => {
+         buffer.push_str("SP, #");
+         u32_to_b10(buffer,imm7.0);
+      },
+      Operands::INCR_SP_BY_REG(r) =>{
+         buffer.push_str("SP, ");
+         serialise_register(buffer,r.0);
+      }, 
+      Operands::ADR(r, imm8) => {
+         serialise_register(buffer,r.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm8.0);
+      },
+      Operands::ASRS_Imm5(d, r, imm5) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,r.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm5.0);
+      },
+      Operands::COND_BRANCH(off) => serialise_branch_offset(buffer, *off),
+      Operands::B_ALWAYS(off) => serialise_branch_offset(buffer, *off),
+      Operands::BREAKPOINT(imm8) => {
+         buffer.push('#');
+         u32_to_b10(buffer,imm8.0);
+      },
+      Operands::BR_LNK(off) => serialise_branch_offset(buffer, *off),
+      Operands::BR_LNK_EXCHANGE(r) => {
+         serialise_register(buffer,r.0);
+      },
+      Operands::BR_EXCHANGE(r) => {
+         serialise_register(buffer,r.0);
+      },
+      Operands::CMP_Imm8(r, imm8) => {
+         serialise_register(buffer,r.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm8.0);
+      },
+      Operands::LDR_Imm5(d, s, imm5) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", [");
+         serialise_register(buffer, s.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm5.0);
+         buffer.push_str("]    //@");
+         let hint = (address + 4 + imm5.0) & !0x3;
+         u32_to_hex(buffer,hint);
+      },
+      Operands::LDR_Imm8(d,s,imm8) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", [");
+         serialise_register(buffer,s.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm8.0);
+         buffer.push_str("]    //@");
+         let hint = (address + 4 + imm8.0) & !0x3;
+         u32_to_hex(buffer,hint);
+      },
+      Operands::LDR_REG(d, s, r) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", [");
+         serialise_register(buffer,s.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,r.0);
+         buffer.push(']');
+      },
+      Operands::LS_Imm5(d, s, imm5) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,s.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer, imm5.0);
+      },
+      Operands::MOV_REG(d, s) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,s.0);
+      },
+      Operands::DestImm8(d, imm8) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm8.0);
+      },
+      Operands::LoadableList(base, list) => {
+       let registers = get_set_bits(*list);
+       //let mut list_str = String::new();
+       serialise_register(buffer,base.0);
+       if (1 << base.0) & *list > 0 {
+          //list_str.push_str(&format!("r{},",base.0));
+          buffer.push(',');
+       }else{
+          //list_str.push_str(&format!("r{}!,",base.0));
+          buffer.push_str("!,");
+       }
+       //list_str.push_str(&fmt_register_list(registers));
+       serialise_register_list(buffer,registers);
+       //write!(f, "{}", list_str)
+      },
+      Operands::RegisterPair(d, r) =>{
+         serialise_register(buffer,d.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,r.0);
+      },
+      Operands::RegPairImm3(d, s, imm3) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,s.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm3.0);
+      },
+      Operands::RegisterTriplet(d, s, a) => {
+         serialise_register(buffer,d.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,s.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,a.0);
+      },
+      Operands::PureRegisterPair(a, b) => {
+         serialise_register(buffer,a.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,b.0);
+      },
+      Operands::RegisterList(list) => {
+       let registers = get_set_bits(*list);
+       serialise_register_list(buffer,registers);
+       //write!(f,"{}",fmt_register_list(registers))
+      },
+      Operands::STR_Imm5(s, base, imm5) => {
+         serialise_register(buffer,s.0);
+         buffer.push_str(", [");
+         serialise_register(buffer,base.0);
+         buffer.push_str(", #");
+         u32_to_b10(buffer,imm5.0);
+         buffer.push(']');
+      },
+      Operands::STR_Imm8(s, imm8) => {
+         serialise_register(buffer,s.0);
+         buffer.push_str(", [SP, #");
+         u32_to_b10(buffer,imm8.0);
+         buffer.push(']');
+      },
+      Operands::STR_REG(s, base, offset_reg) => {
+         serialise_register(buffer,s.0);
+         buffer.push_str(", [");
+         serialise_register(buffer,base.0);
+         buffer.push_str(", ");
+         serialise_register(buffer,offset_reg.0);
+      },
+      Operands::SP_SUB(imm7) => {
+         buffer.push_str("SP, SP, #");
+         u32_to_b10(buffer,imm7.0);
+      },
+      Operands::Byte(imm8) => {
+         u32_to_b10(buffer,imm8.0);
+      },
+      Operands::HalfWord(imm16) => {
+         u32_to_b10(buffer,imm16.0);
+      },
+      Operands::Primask(flag) => {
+         if *flag{
+            buffer.push_str("CPSID i");
+            //write!(f, "CPSID i")
+         }else{
+            buffer.push_str("CPSIE i");
+            //write!(f, "CPSIE i")
+         }
+      },
+      Operands::MSR(meta, src) => {
+         serialise_special_register(buffer,meta);
+         buffer.push_str(", ");
+         serialise_register(buffer,src.0);
+      },
+      Operands::MRS(dest, meta) => {
+         serialise_register(buffer,dest.0);
+         buffer.push_str(", ");
+         serialise_special_register(buffer,meta);
+      },
+      Operands::Nibble(imm4) => {
+         buffer.push('#');
+         u32_to_b10(buffer,imm4.0);
+      },
+   }
+}
+
+fn serialise_special_register(buffer: &mut String, reg: &SpecialRegister){
+   match reg{
+      SpecialRegister::APSR => buffer.push_str("APSR"),
+      SpecialRegister::IAPSR => buffer.push_str("IAPSR"),
+      SpecialRegister::EAPSR => buffer.push_str("EAPSR"),
+      SpecialRegister::XPSR => buffer.push_str("XPSR"),
+      SpecialRegister::IPSR => buffer.push_str("IPSR"),
+      SpecialRegister::EPSR => buffer.push_str("EPSR"),
+      SpecialRegister::IEPSR => buffer.push_str("IEPSR"),
+      SpecialRegister::MSP => buffer.push_str("MSP"),
+      SpecialRegister::PSP => buffer.push_str("PSP"),
+      SpecialRegister::PRIMASK => buffer.push_str("PRIMASK"),
+      SpecialRegister::CONTROL => buffer.push_str("CONTROL")
+   }
+}
+
+
 //TODO  finish whatever this thing was
 /*pub fn has_symbol_operation(operands: &Operands)->bool{
    match operands{
@@ -213,6 +483,16 @@ fn fmt_register_list(registers: Vec<u8>)->String{
    fin.push_str(&list);
    fin.push('}');
    fin
+}
+
+fn serialise_register_list(buffer: &mut String, registers: Vec<u8>){
+   buffer.push('{');
+   for r in 0 .. (registers.len() - 1){
+      serialise_register(buffer,registers[r]);
+      buffer.push(',');
+   }
+   serialise_register(buffer,registers[registers.len() -1]);
+   buffer.push('}');
 }
 
 fn remove_everything_outside_brackets(text: &str)->String{

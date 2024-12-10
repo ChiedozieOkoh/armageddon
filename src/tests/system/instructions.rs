@@ -1,4 +1,4 @@
-use crate::binutils::{BitField, clear_extra_64b};
+use crate::binutils::BitField;
 use crate::system::instructions::{add_with_carry, asr, ConditionFlags};
 
 #[test] 
@@ -48,7 +48,3 @@ pub fn  asr_test(){
    assert_eq!(flags.overflow,true);
 }
 
-#[test]
-pub fn clear_extra(){
-   assert_eq!(clear_extra_64b::<32>(u64::MAX),u32::MAX as u64);
-}
