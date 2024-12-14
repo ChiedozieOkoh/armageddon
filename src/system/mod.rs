@@ -3292,16 +3292,6 @@ impl SystemControlSpace{
    }
 }
 
-fn assert_executable(addr: u32)->Result<(),ArmException>{
-   if default_address_map(addr) & (AddressAttributes::ExecuteNever as u8) > 0 {
-      return Err(
-         ArmException::HardFault(format!("Cannot execute address code on {:#010x} it is XN",addr))
-      );
-   }else{
-      return Ok(());
-   }
-}
-
 #[repr(u8)]
 enum AddressAttributes{
    Normal = 0x1,
@@ -3312,6 +3302,7 @@ enum AddressAttributes{
    StronglyOrdered = 0x20
 }
 
+#[derive(Copy,Clone,Debug)]
 pub struct MemPermission{
    pub privileged: AccessPermission,
    pub unprivileged: AccessPermission
@@ -3323,11 +3314,183 @@ impl Display for MemPermission{
     }
 }
 
-#[derive(Debug)]
+#[derive(Copy,Clone,Debug)]
 pub enum AccessPermission{
    NoAccess,
    ReadOnly,
    ReadAndWrite
+}
+
+struct MpuRegion{
+   pub xn: bool,
+   pub permissions: MemPermission,
+   base: u32,
+   size: u32,
+   sub_region_disabled: u8,
+}
+
+pub struct Mpu{
+    //pub rbar: u32,
+    //pub rasr: u32,
+    //pub ctrl: u8, 
+    //pub rnr: u8,
+    current_region: usize,
+    regions_enabled: u8,
+    ctrl: u8,
+    //xn: [bool;8],
+    region_base: [u32;8],
+    region_rasr: [u32;8],
+} 
+
+impl Mpu{
+   
+   pub fn reset()->Self{
+      Self{
+         current_region: 0,
+         regions_enabled: 0,
+         ctrl: 0,
+         region_base: [0;8],
+         region_rasr: [0;8],
+      }
+   }
+   #[inline]
+   pub fn enabled(&self)->bool{ (self.ctrl & 1) > 0 }
+
+   pub fn get_permissions(&self, addr: u32,privileged: bool, default: (MemPermission,bool))->Result<(MemPermission,bool),ArmException>{
+      assert!(self.regions_enabled > 0,"MPU asked to determine permissions when not enabled this is a bug in the simulator");
+
+      match self.get_region_of(addr){
+         Some(region) => {
+            let rasr = self.region_rasr[region];
+            let xn = (rasr & (1 << 28)) > 0;
+            let perm = MemPermission::from_mpu_rasr(rasr)?;
+            return Ok((perm,xn));
+         },
+         None => {
+            if privileged && self.priv_def_enabled(){
+               println!("Access falls outside regions defined by Mpu");
+               println!("However MPU.PRI_DEF_ENA = 1 so access will be permitted with default memory map");
+               return Ok(default);
+            }else{
+               //TODO check on real hardware what happens to unprivileged acceses when PRIVDEFENA = 0, no regions are configured and ENABLE = 1
+               //for instance are all accesses rejected, or is it read/writable with execution disabled?
+               return Err(ArmException::HardFault("Illegal access to region of memory not defined by the MPU".into()));
+            }
+         }
+      }
+   }
+
+   pub fn get_region_of(&self, addr: u32)->Option<usize>{
+      for i in (0..8).rev(){
+         if ((1 << i) & self.regions_enabled) > 0{
+            println!("\nactive region {} ",i);
+            let base = self.region_base[i];
+            let size_mask = (self.region_rasr[i] & 0x3E) >> 1;
+
+            assert!(size_mask >= 7 && size_mask <= 31,"subregion has invalid size, this is a simulator error, the size should be rejected on write to the RAR register");
+            let size = size_mask + 1;
+            let align_mask = (1_u32 << (size)).wrapping_sub(1);
+            assert!(base & align_mask == 0,"Region is not byte aligned. simulator should not allow this configuration to occur");
+
+            let size_in_bytes: u32 = 1 << size;
+            println!("   region size: {} bytes",size_in_bytes);
+            println!("   subregions disabled: {:#b}",(self.region_rasr[i] & 0xFF00) >> 8);
+            if addr >= base && addr < base + size_in_bytes{
+               let subregion_disable = (self.region_rasr[i] & 0x0000FF00) >> 8;
+               if subregion_disable == 0{
+                  return Some(i);
+               }else{
+                  let subregion_size = size_in_bytes / 8;
+                  println!("   subregion size: {} bytes",subregion_size);
+                  for sb in 0..8{
+                        let sub_base = base + (subregion_size * sb);
+                     if ( 1 << sb) & subregion_disable == 0{
+                        println!("      [*]sub region {} ({} -> {})",sb,sub_base,sub_base + subregion_size);
+
+                        if addr >= sub_base && addr < (sub_base + subregion_size){
+                           return Some(i);
+                        }
+                     }else{
+
+                        println!("      [_]sub region {} ({} -> {})",sb,sub_base,sub_base + subregion_size);
+
+                     }
+                  }
+               }
+            }
+         }
+      }
+      return None;
+   }
+   
+   #[inline]
+   pub fn priv_def_enabled(&self)->bool{ (self.ctrl & 0x4 > 0) }
+
+   #[inline]
+   pub fn set_ctrl(&mut self, v: u32){ self.ctrl = (v & 0x7) as u8; }
+
+   pub fn set_rbar(&mut self, v: u32)->Result<(),ArmException>{
+      let mut changing_region = false;
+      let region = if v & (1 << 4) == 0 {
+         self.current_region
+      }else{
+         changing_region = true;
+         (v & 0xF) as usize
+      };
+      if region >= self.region_base.len(){
+         return Err(ArmException::HardFault("tried to edit region which doesnt exist".into()));
+      }
+
+      if changing_region{ self.current_region = region; }
+
+      let size_mask = (self.region_rasr[region] & 0x3E) >> 1;
+      if size_mask < 7 || size_mask > 31{
+         return Err(ArmException::HardFault("region has invalid size, size is valid iff 7 <= size <= 31".into()));
+      }
+      let size = size_mask + 1;
+      println!("rbar: size_mask = {}",size_mask);
+      let align_mask = (1_u32 << (size)).wrapping_sub(1);
+      let addr = (v & 0xFFFFFF00) >> 8;
+      let aligned = addr & !align_mask;
+      println!("address = {} & {:#b} = {}",addr, !align_mask,aligned);
+      self.region_base[region] = aligned;
+
+      return Ok(());
+   }
+
+   pub fn get_rbar(&self)->u32{
+      //println!("region base {} rnr {}",self.region_base[self.current_region],);
+      self.region_base[self.current_region] << 8 | self.current_region as u32
+   }
+
+   pub fn set_rasr(&mut self, v: u32)->Result<(),ArmException>{
+      let size = (v & 0x3E) >> 1;
+      if size < 7 || size > 31{ 
+         return Err(ArmException::HardFault("Attempt to program MPU.rasr with invalid RASR.size".into()));
+      }
+      println!("setting size = {}",size);
+      println!("setting subregion disabled = {:#b}",(v & 0xFF00) >> 8);
+      self.region_rasr[self.current_region] = v & 0x1707FF3F;
+      if v & 0x1 > 0{
+         self.regions_enabled |=  1 << self.current_region as u32;
+      }else{
+         self.regions_enabled &= !(1 << self.current_region as u32);
+      }
+      return Ok(());
+   }
+
+   pub fn set_rnr(&mut self, v: u32)->Result<(),ArmException>{
+      let region = v & 0xFF;
+      if region as usize >= self.region_base.len() {return Err(ArmException::HardFault("invalid region number".into()));}
+      self.current_region = region as usize;
+      return Ok(());
+   }
+
+   pub fn get_rnr(&self)->u32{
+      self.current_region as u32
+   }
+
+   pub fn get_type(&self)->u32{ 8 << 8 }
 }
 
 impl MemPermission{
@@ -3341,7 +3504,7 @@ impl MemPermission{
    }
 
    pub fn from_mpu_rasr(raw: u32)->Result<Self, ArmException>{
-      let perms = (raw & 0x03000000) >> 24;
+      let perms = (raw & 0x07000000) >> 24;
       match perms {
          0b000 => Ok(Self { 
             privileged: AccessPermission::NoAccess,
