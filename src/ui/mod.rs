@@ -1043,7 +1043,7 @@ impl Application for App{
                               },
                               Event::Ui(e) => {panic!("invalid cmd {:?} sent to sim loop", e)}
                            },
-                           None => todo!(),
+                           None => {},
                         },
                         Err(_) => { },
                      }

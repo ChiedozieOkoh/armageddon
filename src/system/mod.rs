@@ -38,7 +38,7 @@ pub struct System{
    pub reset_cfg: Option<ResetCfg>,
    pub vtor_override: Option<u32>,
    locked_up: bool,
-   pub error_msg: String
+   pub error_msg: String,
 }
 
 pub struct ResetCfg{
@@ -239,7 +239,7 @@ impl System{
          reset_cfg: None,
          vtor_override: None,
          locked_up: false,
-         error_msg: String::new()
+         error_msg: String::new(),
       }
    }
 
@@ -263,7 +263,7 @@ impl System{
          reset_cfg: None,
          vtor_override: None,
          locked_up: false,
-         error_msg: String::new()
+         error_msg: String::new(),
       }
    }
 
@@ -305,7 +305,7 @@ impl System{
          reset_cfg: None,
          vtor_override: None,
          locked_up: false,
-         error_msg: String::new()
+         error_msg: String::new(),
       }
    }
 
@@ -569,6 +569,9 @@ impl System{
                   self.trace.push_str(msg);
                   self.trace.push('\n');
                }
+
+               print!("hardfault now pending: ");
+               println!("{}",msg);
             }
          },
          _ => {}
@@ -646,9 +649,9 @@ impl System{
          self.scs.set_vec_pending(exc_type.number());
          return Ok(None);
       }else{
-         println!("initialising {:?}(priority: {}) exception",exc_type,exc_type.priority_group(&self.scs));
+         println!("initialising {} exception (priority: {}) ",exception_name(exc_type.number()),exc_type.priority_group(&self.scs));
          if self.trace_enabled{
-            self.trace.push_str(&format!("initialising {:?}(priority: {}) exception",exc_type,exc_type.priority_group(&self.scs)));
+            self.trace.push_str(&format!("initialising {} exception (priority: {}) ",exception_name(exc_type.number()),exc_type.priority_group(&self.scs)));
             self.trace.push('\n');
          }
          //TODO once true async interrupts are supported check for late arriving async exceptions here
@@ -656,7 +659,7 @@ impl System{
          let offset = self.jump_to_exception(&exc_type)?;
          println!("exception offset: {:#x}",offset);
          self.offset_pc(offset)?;
-         println!("{:?} exception entry successful branched pc -> {:#x}",exc_type,offset);
+         println!("{} exception entry successful branched pc -> {:#x}",exception_name(exc_type.number()),offset);
          return Ok(Some(self.get_ipsr()));
       }
    }
@@ -683,6 +686,7 @@ impl System{
 
       //let frame_ptr = (sp - offset as u32) & !0x4;
       let frame_ptr = maybe_frame_ptr.unwrap();
+      println!("saving stack frame @ {:#x} privileged: {}",frame_ptr,self.in_privileged_mode());
       self.set_sp(frame_ptr & !0x4)?;
       write_memory(self,frame_ptr, into_arm_bytes(self.registers.generic[0]))?;
       write_memory(self,frame_ptr + 4, into_arm_bytes(self.registers.generic[1]))?;
@@ -692,6 +696,7 @@ impl System{
       write_memory(self,frame_ptr + 20, into_arm_bytes(self.registers.lr))?;
       write_memory(self,frame_ptr + 24, into_arm_bytes(next_instr_address))?;
       write_memory(self,frame_ptr + 28, into_arm_bytes(xpsr))?;
+      println!("finished saving stack frame");
 
       const main_stack_return_to_handler_mode: u32 = 0xFFFFFFF1;
       const main_stack_return_to_thread_mode: u32 = 0xFFFFFFF9;
@@ -929,6 +934,13 @@ impl System{
 
    pub fn is_locked_up(&self)->bool{
       self.locked_up
+   }
+
+   #[inline]
+   fn is_addr_in_vectortable(&self, addr: u32)->bool{
+      let vector_table_base = self.scs.vtor;
+      let len_in_bytes = (1 + self.active_exceptions.len()) as u32 * 4;
+      addr >= vector_table_base && addr < (vector_table_base + len_in_bytes)
    }
 
    pub fn step(&mut self)->Result<i32, ArmException>{
@@ -2481,7 +2493,7 @@ impl System{
 
 
    fn check_unprivileged_permission(&self, addr: u32, acc: Access)->Result<(),ArmException>{
-      let (attributes,exec_never) = self.get_permissions(addr);
+      let (attributes,exec_never) = self.get_unprivileged_permissions(addr)?;
       let err_msg = Err(ArmException::HardFault(
             format!("Invalid attempt to {:?} at address {:#x}, :{:#x} is {}",
             acc,
@@ -2513,7 +2525,7 @@ impl System{
    }
 
    pub fn check_permission(&self, addr: u32, acc: Access)->Result<(),ArmException>{
-      let (attributes,exec_never) = self.get_permissions(addr);
+      let (attributes,exec_never) = self.get_permissions(addr)?;
       let err_msg = Err(ArmException::HardFault(
             format!("Invalid attempt to {:?} at address {:#x}, :{:#x} is {}",
             acc,
@@ -2547,9 +2559,80 @@ impl System{
       }
    }
 
-   pub fn get_permissions(&self, addr: u32)->(MemPermission,bool){
+   pub fn get_unprivileged_permissions(&self, addr: u32)->Result<(MemPermission,bool),ArmException>{
       //TODO allow configurable address attributes map with MPU
-      self.default_permissions(addr)
+      //self.default_permissions(addr)
+      if is_region_ppb(addr){
+         return Ok(
+            (
+               MemPermission{
+                  privileged: AccessPermission::ReadAndWrite,
+                  unprivileged: AccessPermission::NoAccess
+               },
+               true
+            )
+         );
+      }
+      
+      if self.is_addr_in_vectortable(addr){return Ok(self.default_permissions(addr));}
+
+      let _default = self.default_permissions(addr);
+      if !self.scs.mpu.enabled(){
+         return Ok(_default);
+      }else{
+         match self.get_ipsr(){
+            1..=3 => {
+               println!("WARN MPU active during fault");
+               if self.scs.mpu.hf_nmi_enabled(){
+                  println!("using permissions from MPU");
+                  return self.scs.mpu.get_permissions(addr,false,_default);
+               }else{
+                  println!("using permissions from default map");
+                  return Ok(_default);
+               }
+            },
+            _=> {
+               return self.scs.mpu.get_permissions(addr,false,_default);
+            }
+         }
+      }
+   }
+
+   pub fn get_permissions(&self, addr: u32)->Result<(MemPermission,bool),ArmException>{
+      //TODO allow configurable address attributes map with MPU
+      //self.default_permissions(addr)
+      if is_region_ppb(addr){
+         return Ok(
+            (
+               MemPermission{
+                  privileged: AccessPermission::ReadAndWrite,
+                  unprivileged: AccessPermission::NoAccess
+               },
+               true
+            )
+         );
+      }
+
+      if self.is_addr_in_vectortable(addr){return Ok(self.default_permissions(addr));}
+      
+      let _default = self.default_permissions(addr);
+      let privileged = self.in_privileged_mode();
+      if !self.scs.mpu.enabled(){
+         return Ok(_default);
+      }else{
+         match self.get_ipsr(){
+            1..=3 => {
+               if self.scs.mpu.hf_nmi_enabled(){
+                  return self.scs.mpu.get_permissions(addr,privileged,_default);
+               }else{
+                  return Ok(_default);
+               }
+            },
+            _=> {
+               return self.scs.mpu.get_permissions(addr,privileged,_default);
+            }
+         }
+      }
    }
 
    ///bool is the execute never flag
@@ -2594,15 +2677,6 @@ impl System{
       std::cmp::min(cur_priority,boosted_priority)
    }
 
-}
-
-pub fn is_thread_privileged(sys: &System)->bool{
-   let v = from_arm_bytes(sys.control_register);
-   return (v & 1) == 0;
-}
-
-pub fn get_exception_number(sys: &System)-> u32{
-   return from_arm_bytes(sys.xpsr) & 0x3F;
 }
 
 fn is_system_in_le_mode(_sys: &System)-> bool{
@@ -2853,18 +2927,6 @@ impl ArmException{
       }
    }
 
-   pub fn is_fault(&self)->bool{
-      match self{
-         Self::Reset => false,
-         Self::Nmi => false,
-         Self::HardFault(_) => true,
-         Self::Svc => false,
-         Self::PendSV => false,
-         Self::SysTick => false,
-         Self::ExternInterrupt(_) => false,
-      }
-   }
-
    pub fn priority_group(&self, _scs: &SystemControlSpace)->i32{
       match self{
          Self::Reset => -3,
@@ -2878,6 +2940,7 @@ impl ArmException{
    }
 }
 
+//TODO add Mpu registers to MemoryMappedRegister
 #[derive(Debug)]
 enum MemoryMappedRegister{
    nvic_iser,
@@ -2895,7 +2958,12 @@ enum MemoryMappedRegister{
    scr,
    ccr,
    shpr2,
-   shpr3
+   shpr3,
+   mpu_type,
+   mpu_ctrl,
+   mpu_rnr,
+   mpu_rbar,
+   mpu_rasr,
 }
 
 impl MemoryMappedRegister{
@@ -2922,6 +2990,12 @@ impl MemoryMappedRegister{
          0xE000ED14 =>{ Some(Self::ccr) },
          0xE000ED1C =>{ Some(Self::shpr2) },
          0xE000ED20 =>{ Some(Self::shpr3) },
+         0xE000ED90 =>{ Some(Self::mpu_type) },
+         0xE000ED94 =>{ Some(Self::mpu_ctrl) },
+         0xE000ED98 =>{ Some(Self::mpu_rnr) },
+         0xE000ED9C =>{ Some(Self::mpu_rbar) },
+         0xE000EDA0 =>{ Some(Self::mpu_rasr) },
+
          _ => {
             dbg_ln!("WARN: {:#x} has no associated system register in the PPB space",address);
             None
@@ -2971,7 +3045,13 @@ impl MemoryMappedRegister{
          },
          MemoryMappedRegister::syst_rvr=>{sys.scs.clock_reset},
          MemoryMappedRegister::syst_cvr=>{sys.scs.clock_value},
-         MemoryMappedRegister::syst_calib=>{0x80000000}
+         MemoryMappedRegister::syst_calib=>{0x80000000},
+
+         MemoryMappedRegister::mpu_type => {8 << 8},
+         MemoryMappedRegister::mpu_ctrl => {sys.scs.mpu.get_ctrl()},
+         MemoryMappedRegister::mpu_rnr  => {sys.scs.mpu.get_rnr()},
+         MemoryMappedRegister::mpu_rbar => {sys.scs.mpu.get_rbar()},
+         MemoryMappedRegister::mpu_rasr => {sys.scs.mpu.get_rasr()},
       }
    }
 
@@ -3190,7 +3270,20 @@ impl MemoryMappedRegister{
             if sys.trace_enabled{
                sys.trace.push_str("WARN: SYST.CALIB is a read only register, write will be ignored\n");
             }
+         },
+
+         MemoryMappedRegister::mpu_type=> {},//do nothing
+         MemoryMappedRegister::mpu_ctrl=> {sys.scs.mpu.set_ctrl(v);},
+         MemoryMappedRegister::mpu_rnr => {
+            if let Err(e) = sys.scs.mpu.set_rnr(v){ sys.set_exc_pending(e); }
+         },
+         MemoryMappedRegister::mpu_rbar =>{
+            if let Err(e) = sys.scs.mpu.set_rbar(v){ sys.set_exc_pending(e); }
+         },
+         MemoryMappedRegister::mpu_rasr => {
+            if let Err(e) = sys.scs.mpu.set_rasr(v){ sys.set_exc_pending(e); }
          }
+         
       }
    }
 }
@@ -3210,7 +3303,8 @@ pub struct SystemControlSpace{
    pub ccr: u32,
    pub shpr2: u32,
    pub shpr3: u32,
-   pub ipr: [u32;8]
+   pub ipr: [u32;8],
+   pub mpu: Mpu,
 }
 
 impl SystemControlSpace{
@@ -3230,7 +3324,8 @@ impl SystemControlSpace{
          ccr: 0x108,
          shpr2: 0,
          shpr3: 0,
-         ipr: [0; 8] 
+         ipr: [0; 8],
+         mpu: Mpu::reset(),
       }
    }
 
@@ -3356,6 +3451,9 @@ impl Mpu{
    #[inline]
    pub fn enabled(&self)->bool{ (self.ctrl & 1) > 0 }
 
+   #[inline]
+   pub fn hf_nmi_enabled(&self)->bool{ (self.ctrl & 2) > 0 }
+
    pub fn get_permissions(&self, addr: u32,privileged: bool, default: (MemPermission,bool))->Result<(MemPermission,bool),ArmException>{
       assert!(self.regions_enabled > 0,"MPU asked to determine permissions when not enabled this is a bug in the simulator");
 
@@ -3364,6 +3462,7 @@ impl Mpu{
             let rasr = self.region_rasr[region];
             let xn = (rasr & (1 << 28)) > 0;
             let perm = MemPermission::from_mpu_rasr(rasr)?;
+            println!("access to region {} | {:?},xn: {}",region,perm,xn);
             return Ok((perm,xn));
          },
          None => {
@@ -3374,16 +3473,19 @@ impl Mpu{
             }else{
                //TODO check on real hardware what happens to unprivileged acceses when PRIVDEFENA = 0, no regions are configured and ENABLE = 1
                //for instance are all accesses rejected, or is it read/writable with execution disabled?
-               return Err(ArmException::HardFault("Illegal access to region of memory not defined by the MPU".into()));
+
+               let e = ArmException::HardFault("Illegal access to region of memory not defined by the MPU".into());
+               println!("{:?}",e);
+               return Err(e);
             }
          }
       }
    }
 
    pub fn get_region_of(&self, addr: u32)->Option<usize>{
+      println!("[mpu active regions] {:#b}",self.regions_enabled);
       for i in (0..8).rev(){
          if ((1 << i) & self.regions_enabled) > 0{
-            println!("\nactive region {} ",i);
             let base = self.region_base[i];
             let size_mask = (self.region_rasr[i] & 0x3E) >> 1;
 
@@ -3393,26 +3495,26 @@ impl Mpu{
             assert!(base & align_mask == 0,"Region is not byte aligned. simulator should not allow this configuration to occur");
 
             let size_in_bytes: u32 = 1 << size;
-            println!("   region size: {} bytes",size_in_bytes);
-            println!("   subregions disabled: {:#b}",(self.region_rasr[i] & 0xFF00) >> 8);
+            println!("   {}: {:#x} -> {:#x} ({} bytes) ",i,base,base + size_in_bytes,size_in_bytes);
             if addr >= base && addr < base + size_in_bytes{
                let subregion_disable = (self.region_rasr[i] & 0x0000FF00) >> 8;
+               println!("   sd: {:#b}",subregion_disable);
                if subregion_disable == 0{
                   return Some(i);
                }else{
                   let subregion_size = size_in_bytes / 8;
-                  println!("   subregion size: {} bytes",subregion_size);
+                  //println!("   subregion size: {} bytes",subregion_size);
                   for sb in 0..8{
                         let sub_base = base + (subregion_size * sb);
                      if ( 1 << sb) & subregion_disable == 0{
-                        println!("      [*]sub region {} ({} -> {})",sb,sub_base,sub_base + subregion_size);
+                        //println!("      [*]sub region {} ({} -> {})",sb,sub_base,sub_base + subregion_size);
 
                         if addr >= sub_base && addr < (sub_base + subregion_size){
                            return Some(i);
                         }
                      }else{
 
-                        println!("      [_]sub region {} ({} -> {})",sb,sub_base,sub_base + subregion_size);
+                        //println!("      [_]sub region {} ({} -> {})",sb,sub_base,sub_base + subregion_size);
 
                      }
                   }
@@ -3429,6 +3531,13 @@ impl Mpu{
    #[inline]
    pub fn set_ctrl(&mut self, v: u32){ self.ctrl = (v & 0x7) as u8; }
 
+   #[inline]
+   pub fn get_ctrl(&self)->u32{self.ctrl as u32}
+
+   //TODO to support rbar.VALID we need to allow unaligned values to be written rbar
+   //thus we need to check if the base is aligned with the size of a region on all
+   //after every rasr operation
+   //also software needs to be able to write FFFFFFFF to rbar at get an automatically aligned address which will indicate the minimum alignment of a certain size 
    pub fn set_rbar(&mut self, v: u32)->Result<(),ArmException>{
       let mut changing_region = false;
       let region = if v & (1 << 4) == 0 {
@@ -3441,7 +3550,9 @@ impl Mpu{
          return Err(ArmException::HardFault("tried to edit region which doesnt exist".into()));
       }
 
-      if changing_region{ self.current_region = region; }
+      if changing_region{ 
+         self.current_region = region;
+      }
 
       let size_mask = (self.region_rasr[region] & 0x3E) >> 1;
       if size_mask < 7 || size_mask > 31{
@@ -3468,6 +3579,7 @@ impl Mpu{
       if size < 7 || size > 31{ 
          return Err(ArmException::HardFault("Attempt to program MPU.rasr with invalid RASR.size".into()));
       }
+      //TODO assert v.AP is valid, i.e not 0b100
       println!("setting size = {}",size);
       println!("setting subregion disabled = {:#b}",(v & 0xFF00) >> 8);
       self.region_rasr[self.current_region] = v & 0x1707FF3F;
@@ -3479,6 +3591,9 @@ impl Mpu{
       return Ok(());
    }
 
+   #[inline]
+   pub fn get_rasr(&self)->u32{ self.region_rasr[self.current_region] }
+
    pub fn set_rnr(&mut self, v: u32)->Result<(),ArmException>{
       let region = v & 0xFF;
       if region as usize >= self.region_base.len() {return Err(ArmException::HardFault("invalid region number".into()));}
@@ -3486,11 +3601,8 @@ impl Mpu{
       return Ok(());
    }
 
-   pub fn get_rnr(&self)->u32{
-      self.current_region as u32
-   }
-
-   pub fn get_type(&self)->u32{ 8 << 8 }
+   #[inline]
+   pub fn get_rnr(&self)->u32{ self.current_region as u32 }
 }
 
 impl MemPermission{
@@ -3519,7 +3631,7 @@ impl MemPermission{
             unprivileged: AccessPermission::ReadOnly
          }),
          0b011 => Ok(Self::full_access()),
-         0b100 => Err(ArmException::HardFault("AP value of 0x4 is undefined".into())),
+         0b100 => Err(ArmException::HardFault("Mpu.Rasr.AP value of 0b100 is undefined".into())),
          0b101 => Ok(Self{
             privileged: AccessPermission::ReadAndWrite,
             unprivileged: AccessPermission::NoAccess
